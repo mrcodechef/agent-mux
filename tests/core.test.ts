@@ -5,20 +5,28 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, symlinkSync, chmodSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { parseCliArgs } from "../src/core.ts";
 import { TIMEOUT_BY_EFFORT } from "../src/types.ts";
 
 let originalArgv: string[];
+let originalCodexPathEnv: string | undefined;
 
 beforeEach(() => {
   originalArgv = process.argv;
+  originalCodexPathEnv = process.env.AGENT_MUX_CODEX_PATH;
+  delete process.env.AGENT_MUX_CODEX_PATH;
 });
 
 afterEach(() => {
   process.argv = originalArgv;
+  if (originalCodexPathEnv === undefined) {
+    delete process.env.AGENT_MUX_CODEX_PATH;
+  } else {
+    process.env.AGENT_MUX_CODEX_PATH = originalCodexPathEnv;
+  }
 });
 
 /** Helper: set process.argv as if the CLI was invoked with the given args */
@@ -53,6 +61,16 @@ function writeSkill(cwd: string, name: string, content = `# ${name}`): void {
   const skillDir = join(cwd, ".claude", "skills", name);
   mkdirSync(skillDir, { recursive: true });
   writeFileSync(join(skillDir, "SKILL.md"), content);
+}
+
+function makeExecutableWrapper(cwd: string, relativePath: string): string {
+  const fullPath = join(cwd, relativePath);
+  const body = process.platform === "win32" ? "@echo off\r\nexit /b 0\r\n" : "#!/bin/sh\nexit 0\n";
+  writeFileSync(fullPath, body);
+  if (process.platform !== "win32") {
+    chmodSync(fullPath, 0o755);
+  }
+  return fullPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -420,6 +438,84 @@ describe("parseCliArgs — codex-specific options", () => {
     if (result.kind === "ok") {
       expect(result.config.engineOptions.network).toBe(true);
     }
+  });
+
+  test("--codex-path stores a validated resolved override path", () => {
+    withTempWorkspace((cwd) => {
+      const binDir = join(cwd, "bin");
+      mkdirSync(binDir, { recursive: true });
+      const relativeWrapperPath = process.platform === "win32" ? "bin/codex-wrapper.cmd" : "bin/codex-wrapper";
+      makeExecutableWrapper(cwd, relativeWrapperPath);
+
+      setArgs("--engine", "codex", "--cwd", cwd, "--codex-path", `./${relativeWrapperPath}`, "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.engineOptions.codexPathOverride).toBe(resolve(cwd, relativeWrapperPath));
+      }
+    });
+  });
+
+  test("AGENT_MUX_CODEX_PATH sets the override when CLI flag is absent", () => {
+    process.env.AGENT_MUX_CODEX_PATH = process.execPath;
+    setArgs("--engine", "codex", "test");
+    const result = parseCliArgs();
+    expect(result.kind).toBe("ok");
+    if (result.kind === "ok") {
+      expect(result.config.engineOptions.codexPathOverride).toBe(resolve(process.execPath));
+    }
+  });
+
+  test("--codex-path takes precedence over AGENT_MUX_CODEX_PATH", () => {
+    withTempWorkspace((cwd) => {
+      process.env.AGENT_MUX_CODEX_PATH = "/tmp/does-not-matter";
+      const binDir = join(cwd, "bin");
+      mkdirSync(binDir, { recursive: true });
+      const relativeWrapperPath = process.platform === "win32" ? "bin/codex-wrapper.cmd" : "bin/codex-wrapper";
+      makeExecutableWrapper(cwd, relativeWrapperPath);
+
+      setArgs("--engine", "codex", "--cwd", cwd, "--codex-path", `./${relativeWrapperPath}`, "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("ok");
+      if (result.kind === "ok") {
+        expect(result.config.engineOptions.codexPathOverride).toBe(resolve(cwd, relativeWrapperPath));
+      }
+    });
+  });
+
+  test("--codex-path missing file returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      setArgs("--engine", "codex", "--cwd", cwd, "--codex-path", "./missing-codex", "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("Invalid Codex binary override from --codex-path");
+        expect(result.error).toContain("file not found");
+      }
+    });
+  });
+
+  test("AGENT_MUX_CODEX_PATH non-executable file returns invalid", () => {
+    withTempWorkspace((cwd) => {
+      const badPath = join(cwd, process.platform === "win32" ? "codex-wrapper.txt" : "codex-wrapper");
+      writeFileSync(badPath, "#!/bin/sh\nexit 0\n");
+      if (process.platform !== "win32") {
+        chmodSync(badPath, 0o644);
+      }
+      process.env.AGENT_MUX_CODEX_PATH = badPath;
+
+      setArgs("--engine", "codex", "--cwd", cwd, "test");
+      const result = parseCliArgs();
+      expect(result.kind).toBe("invalid");
+      if (result.kind === "invalid") {
+        expect(result.error).toContain("Invalid Codex binary override from AGENT_MUX_CODEX_PATH");
+        if (process.platform === "win32") {
+          expect(result.error).toContain("expected a Windows executable");
+        } else {
+          expect(result.error).toContain("not executable");
+        }
+      }
+    });
   });
 
   test("default sandbox is read-only for codex", () => {

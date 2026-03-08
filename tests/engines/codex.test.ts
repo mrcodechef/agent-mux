@@ -51,6 +51,7 @@ function makeConfig(overrides: Partial<RunConfig> = {}): RunConfig {
       reasoning: "medium",
       network: false,
       addDirs: [],
+      codexPathOverride: undefined,
     },
     ...overrides,
   };
@@ -284,6 +285,29 @@ describe("CodexEngine — config transformation", () => {
     await engine.run(config, makeCallbacks());
 
     expect(captured.threadOptions.additionalDirectories).toEqual(["/extra/dir"]);
+  });
+
+  test("codex path override is passed to the SDK constructor when provided", async () => {
+    mockEvents = [
+      {
+        type: "item.completed",
+        item: { type: "agent_message", text: "ok" },
+      },
+      { type: "turn.completed", usage: { input_tokens: 0, output_tokens: 0 } },
+    ];
+
+    const engine = new CodexEngine();
+    await engine.run(makeConfig({
+      engineOptions: {
+        sandbox: "read-only",
+        reasoning: "medium",
+        network: false,
+        addDirs: [],
+        codexPathOverride: "/custom/codex",
+      },
+    }), makeCallbacks());
+
+    expect(captured.codexOptions.codexPathOverride).toBe("/custom/codex");
   });
 
   test("skipGitRepoCheck is always true", async () => {

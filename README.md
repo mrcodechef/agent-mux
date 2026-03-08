@@ -103,7 +103,10 @@ Effort defaults:
 | `--sandbox` |  | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | `--full` forces `danger-full-access` |
 | `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Reasoning effort |
 | `--network` | `-n` | boolean | `false` | `--full` forces `true` |
+| `--codex-path` |  | path | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
 | `--add-dir` | `-d` | path (repeatable) | none | Additional writable dirs |
+
+`--codex-path` and `AGENT_MUX_CODEX_PATH` are opt-in only. When neither is set, agent-mux keeps the SDK's default Codex binary resolution unchanged. Relative override paths resolve from `--cwd` (or the current directory if `--cwd` is unset).
 
 ### Claude Flags
 | Flag | Short | Values | Default | Notes |

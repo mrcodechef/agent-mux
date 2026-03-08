@@ -11,8 +11,8 @@
  */
 
 import { parseArgs } from "node:util";
-import { readFileSync, existsSync, statSync } from "node:fs";
-import { resolve, dirname, join, delimiter, sep, relative, isAbsolute } from "node:path";
+import { readFileSync, existsSync, statSync, accessSync, constants as fsConstants } from "node:fs";
+import { resolve, dirname, join, delimiter, sep, relative, isAbsolute, extname } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import * as yaml from "js-yaml";
@@ -34,6 +34,7 @@ import { TIMEOUT_BY_EFFORT as timeoutByEffort } from "./types.ts";
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const VALID_ENGINES: EngineName[] = ["codex", "claude", "opencode"];
 const VALID_EFFORTS: EffortLevel[] = ["low", "medium", "high", "xhigh"];
+const WINDOWS_EXECUTABLE_EXTENSIONS = new Set([".exe", ".cmd", ".bat", ".com"]);
 
 // --- Parsed Config ---
 
@@ -83,6 +84,7 @@ Codex Options:
       --sandbox <mode>       read-only (default), workspace-write, danger-full-access
   -r, --reasoning <level>    Codex reasoning: minimal, low, medium, high, xhigh
   -n, --network              Enable network access
+      --codex-path <path>    Override Codex binary (or set AGENT_MUX_CODEX_PATH)
   -d, --add-dir <path>       Additional writable directory (repeatable)`;
 
   const claudeOpts = `
@@ -148,6 +150,53 @@ function extractFrontmatter(content: string): { frontmatter: Record<string, any>
 function isContainedIn(child: string, parent: string): boolean {
   const rel = relative(parent, child);
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel);
+}
+
+function resolveCodexPathOverride(
+  baseDir: string,
+  rawPath: string,
+  source: "--codex-path" | "AGENT_MUX_CODEX_PATH",
+): string {
+  const trimmedPath = rawPath.trim();
+  if (!trimmedPath) {
+    throw new Error(`Invalid Codex binary override from ${source}: path must not be empty`);
+  }
+
+  const resolvedPath = resolve(baseDir, trimmedPath);
+
+  let stats: ReturnType<typeof statSync>;
+  try {
+    stats = statSync(resolvedPath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      throw new Error(`Invalid Codex binary override from ${source}: file not found at ${resolvedPath}`);
+    }
+    throw new Error(
+      `Invalid Codex binary override from ${source}: failed to read ${resolvedPath}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+
+  if (!stats.isFile()) {
+    throw new Error(`Invalid Codex binary override from ${source}: expected a file at ${resolvedPath}`);
+  }
+
+  if (process.platform === "win32") {
+    const extension = extname(resolvedPath).toLowerCase();
+    if (!WINDOWS_EXECUTABLE_EXTENSIONS.has(extension)) {
+      throw new Error(
+        `Invalid Codex binary override from ${source}: expected a Windows executable (.exe, .cmd, .bat, or .com) at ${resolvedPath}`,
+      );
+    }
+    return resolvedPath;
+  }
+
+  try {
+    accessSync(resolvedPath, fsConstants.X_OK);
+  } catch {
+    throw new Error(`Invalid Codex binary override from ${source}: file is not executable: ${resolvedPath}`);
+  }
+
+  return resolvedPath;
 }
 
 function loadCoordinatorSpec(
@@ -247,6 +296,7 @@ export function parseCliArgs(): ParseResult {
         sandbox: { type: "string" },
         reasoning: { type: "string", short: "r" },
         network: { type: "boolean", short: "n" },
+        "codex-path": { type: "string" },
         "add-dir": { type: "string", short: "d", multiple: true },
         // Claude-specific
         "permission-mode": { type: "string", short: "p" },
@@ -340,6 +390,22 @@ export function parseCliArgs(): ParseResult {
       engineOptions.reasoning = (values.reasoning as string) || "medium";
       engineOptions.network = fullMode || values.network === true;
       engineOptions.addDirs = (values["add-dir"] as string[] | undefined) ?? [];
+      const codexPathOverride = (values["codex-path"] as string | undefined) ?? process.env.AGENT_MUX_CODEX_PATH;
+      if (typeof codexPathOverride === "string") {
+        try {
+          engineOptions.codexPathOverride = resolveCodexPathOverride(
+            cwd,
+            codexPathOverride,
+            values["codex-path"] !== undefined ? "--codex-path" : "AGENT_MUX_CODEX_PATH",
+          );
+        } catch (err) {
+          return {
+            kind: "invalid",
+            error: err instanceof Error ? err.message : String(err),
+            engine,
+          };
+        }
+      }
       // Codex: add skill directories for sandbox access (will be populated after skill resolution below)
     }
 

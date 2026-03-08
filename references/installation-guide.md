@@ -142,6 +142,18 @@ agent-mux --engine codex --cwd /path/to/project --skill agent-mux "What skills d
 agent-mux --engine claude --cwd /path/to/project --coordinator get-shit-done-agent "List your capabilities"
 ```
 
+Optional Codex binary override:
+
+```bash
+AGENT_MUX_CODEX_PATH=/absolute/path/to/codex agent-mux --engine codex "Say hello"
+agent-mux --engine codex --codex-path /absolute/path/to/codex "Say hello"
+```
+
+Notes:
+- The CLI flag wins over `AGENT_MUX_CODEX_PATH` when both are set.
+- Relative override paths resolve from `--cwd` (or the current directory if `--cwd` is unset).
+- If the override path does not exist or is not executable, agent-mux fails before starting the Codex SDK.
+
 Expected result for successful runs:
 - JSON output on stdout
 - Includes `"success": true`
@@ -154,6 +166,9 @@ Expected result for successful runs:
   - Verify required env var for your selected engine.
   - For Codex, run `codex auth` to use OAuth fallback.
   - For Claude, device OAuth is supported when key is not set.
+- Invalid Codex binary override
+  - Check `--codex-path` or `AGENT_MUX_CODEX_PATH`.
+  - Confirm the path points to an existing executable file.
 - TypeScript errors during setup
   - Usually non-blocking; Bun runs TypeScript directly.
 - `bun: command not found`

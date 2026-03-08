@@ -121,6 +121,7 @@ Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
 | `--sandbox` | -- | string | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | `--full` forces `danger-full-access` |
 | `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort |
 | `--network` | `-n` | boolean | true/false | `false` | `--full` forces `true` |
+| `--codex-path` | -- | string | path to Codex binary | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
 | `--add-dir` | `-d` | string[] | repeatable paths | `[]` | Additional writable dirs |
 
 ### Claude-specific

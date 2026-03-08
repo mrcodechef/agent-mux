@@ -66,6 +66,7 @@ export class CodexEngine implements EngineAdapter {
     const sandbox = (config.engineOptions.sandbox as SandboxMode) || "read-only";
     const network = (config.engineOptions.network as boolean) || false;
     const addDirs = (config.engineOptions.addDirs as string[]) || [];
+    const codexPathOverride = config.engineOptions.codexPathOverride as string | undefined;
 
     // Build MCP config overrides
     // Strategy: when clusters are requested, disable non-requested cluster servers
@@ -93,9 +94,13 @@ export class CodexEngine implements EngineAdapter {
       }
     }
 
-    const codexOptions: CodexOptions = {
-      config: hasClusters ? { mcp_servers: mcpOverride } : undefined,
-    };
+    const codexOptions: CodexOptions = {};
+    if (hasClusters) {
+      codexOptions.config = { mcp_servers: mcpOverride };
+    }
+    if (codexPathOverride) {
+      codexOptions.codexPathOverride = codexPathOverride;
+    }
 
     const codex = new Codex(codexOptions);
     const thread = codex.startThread({
