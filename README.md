@@ -42,6 +42,8 @@ Concrete flow:
 | `claude` | `ANTHROPIC_API_KEY` | Claude Code SDK also supports device OAuth when no key is set |
 | `opencode` | `OPENROUTER_API_KEY` | Or configure provider-specific keys directly in OpenCode |
 
+> **Note — Anthropic ToS compliance:** The `claude` engine uses Claude Code SDK with your API key (`ANTHROPIC_API_KEY`) — this is the fully compliant path. Device OAuth (subscription login) falls under Anthropic's Consumer ToS §3.7 which restricts automated/scripted access outside the API. **Recommended: always use `ANTHROPIC_API_KEY` for the `claude` engine.** See [issue #1](https://github.com/buildoak/agent-mux/issues/1) for discussion.
+
 **MCP clusters** are optional and only needed with `--mcp-cluster`.
 
 ## Quick Start
