@@ -118,9 +118,9 @@ Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
 
 | Flag | Short | Type | Values | Default | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `--sandbox` | -- | string | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | `--full` forces `danger-full-access` |
+| `--sandbox` | -- | string | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
 | `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort |
-| `--network` | `-n` | boolean | true/false | `false` | `--full` forces `true` |
+| `--network` | `-n` | boolean | true/false | `true` | Enabled by default; `--full` also forces `true` |
 | `--codex-path` | -- | string | path to Codex binary | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
 | `--add-dir` | `-d` | string[] | repeatable paths | `[]` | Additional writable dirs |
 
@@ -153,7 +153,7 @@ Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
 
 All engines emit one JSON payload to `stdout`. Parse JSON, never text.
 
-Success shape: `{ success: true, engine, response, timed_out, duration_ms, activity, metadata }`
+Success shape: `{ success: true, engine, response, timed_out, completed, duration_ms, activity, metadata }`
 Error shape: `{ success: false, engine, error, code, duration_ms, activity }`
 
 Error codes: `INVALID_ARGS`, `MISSING_API_KEY`, `SDK_ERROR`.
@@ -295,9 +295,31 @@ See `mcp-clusters.example.yaml` for config format.
 
 ---
 
+## Timeout Alignment
+
+When calling agent-mux from a wrapper (Claude Code `Task`, Bash `timeout`, shell scripts), the wrapper's timeout **must exceed** agent-mux's internal timeout by at least 60 seconds. Otherwise the wrapper kills the process before agent-mux's graceful timeout path fires, losing activity logs and the `timed_out: true` JSON response.
+
+| Effort | agent-mux timeout | Wrapper minimum timeout |
+|--------|-------------------|------------------------|
+| `low` | 2 min (120s) | 3 min (180s / 180000ms) |
+| `medium` | 10 min (600s) | 11 min (660s / 660000ms) |
+| `high` | 30 min (1800s) | 31 min (1860s / 1860000ms) |
+| `xhigh` | 45 min (2700s) | 46 min (2760s / 2760000ms) |
+
+**Rule:** `wrapper_timeout = agent_mux_timeout + 60_000ms`
+
+## Completed Field
+
+The `completed` boolean on success output is the single source of truth for whether work finished:
+- `completed: true` — work ran to completion (normal exit)
+- `completed: false` — work was interrupted (timeout or shutdown)
+
+Callers MUST check `completed` (or at minimum `timed_out`) before treating output as final. Checking only `success` will treat timeouts as completions.
+
+---
+
 ## Anti-Patterns
 
-- Do not use `--sandbox danger-full-access` unless explicitly authorized.
 - Do not parse agent-mux output as text. Always parse JSON from stdout.
 - Do not run parallel browser workers. One browser session at a time.
 - Do not read agent output files with full Read; use `tail -n 20` via Bash.

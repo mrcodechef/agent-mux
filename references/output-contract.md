@@ -12,6 +12,7 @@ All engines emit one JSON payload to `stdout`. `stderr` carries heartbeat lines 
   "engine": "codex",
   "response": "Implemented retries and added tests.",
   "timed_out": false,
+  "completed": true,
   "duration_ms": 84231,
   "activity": {
     "files_changed": ["src/http/client.ts"],
@@ -61,6 +62,7 @@ All engines emit one JSON payload to `stdout`. `stderr` carries heartbeat lines 
 | `engine` | `string` | always | One of `codex`, `claude`, `opencode` |
 | `response` | `string` | success only | Agent text response. On timeout this can be a placeholder |
 | `timed_out` | `boolean` | success only | `true` if timeout fired and run was aborted via AbortSignal |
+| `completed` | `boolean` | success only | `true` only when work ran to completion (`success && !timed_out`). Single source of truth for done-ness |
 | `error` | `string` | error only | Human-readable error message |
 | `code` | `string` | error only | Failure class: `INVALID_ARGS`, `MISSING_API_KEY`, `SDK_ERROR` |
 | `duration_ms` | `number` | always | End-to-end runtime in milliseconds |
@@ -105,12 +107,13 @@ Copied from `README.md`. Canonical source: `src/types.ts`.
     {
       "type": "object",
       "description": "Successful run (including timeout with partial results).",
-      "required": ["success", "engine", "response", "timed_out", "duration_ms", "activity", "metadata"],
+      "required": ["success", "engine", "response", "timed_out", "completed", "duration_ms", "activity", "metadata"],
       "properties": {
         "success": { "const": true, "description": "Always true for success payloads." },
         "engine": { "enum": ["codex", "claude", "opencode"], "description": "Engine used for the run." },
         "response": { "type": "string", "description": "Agent text response. On timeout this can be a placeholder." },
         "timed_out": { "type": "boolean", "description": "True if timeout fired and run was aborted via AbortSignal." },
+        "completed": { "type": "boolean", "description": "True only when work ran to completion (success && !timed_out). Single source of truth for done-ness." },
         "duration_ms": { "type": "number", "description": "End-to-end runtime in milliseconds." },
         "activity": { "$ref": "#/$defs/activity" },
         "metadata": {

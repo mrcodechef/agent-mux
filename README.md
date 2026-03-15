@@ -92,17 +92,17 @@ Effort defaults:
 | --- | --- |
 | `low` | `120000` ms (2 min) |
 | `medium` | `600000` ms (10 min) |
-| `high` | `1200000` ms (20 min) |
-| `xhigh` | `2400000` ms (40 min) |
+| `high` | `1800000` ms (30 min) |
+| `xhigh` | `2700000` ms (45 min) |
 
 `agent-mux` prepends a time-budget instruction to every prompt, telling the agent how much wall-clock time it has. This affects agent behavior -- agents will scope their work to fit the budget.
 
 ### Codex Flags
 | Flag | Short | Values | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `--sandbox` |  | `read-only`, `workspace-write`, `danger-full-access` | `read-only` | `--full` forces `danger-full-access` |
+| `--sandbox` |  | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
 | `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Reasoning effort |
-| `--network` | `-n` | boolean | `false` | `--full` forces `true` |
+| `--network` | `-n` | boolean | `true` | Enabled by default |
 | `--codex-path` |  | path | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
 | `--add-dir` | `-d` | path (repeatable) | none | Additional writable dirs |
 
@@ -135,12 +135,13 @@ OpenCode presets include `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deeps
     {
       "type": "object",
       "description": "Successful run (including timeout with partial results).",
-      "required": ["success", "engine", "response", "timed_out", "duration_ms", "activity", "metadata"],
+      "required": ["success", "engine", "response", "timed_out", "completed", "duration_ms", "activity", "metadata"],
       "properties": {
         "success": { "const": true, "description": "Always true for success payloads." },
         "engine": { "enum": ["codex", "claude", "opencode"], "description": "Engine used for the run." },
         "response": { "type": "string", "description": "Agent text response. On timeout this can be a placeholder." },
         "timed_out": { "type": "boolean", "description": "True if timeout fired and run was aborted via AbortSignal." },
+        "completed": { "type": "boolean", "description": "True only when work ran to completion (success && !timed_out). Single source of truth for done-ness." },
         "duration_ms": { "type": "number", "description": "End-to-end runtime in milliseconds." },
         "activity": { "$ref": "#/$defs/activity" },
         "metadata": {

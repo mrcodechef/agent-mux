@@ -25,8 +25,8 @@ Detailed engine capabilities, configuration modes, and operational parameters.
 | --- | ---: | --- | --- |
 | `low` | `120000` | 2 min | Quick checks, trivial fixes |
 | `medium` | `600000` | 10 min | Routine tasks (default) |
-| `high` | `1200000` | 20 min | Workhorse for implementation |
-| `xhigh` | `2400000` | 40 min | Deep analysis only |
+| `high` | `1800000` | 30 min | Workhorse for implementation |
+| `xhigh` | `2700000` | 45 min | Deep analysis only |
 
 ---
 
@@ -34,9 +34,9 @@ Detailed engine capabilities, configuration modes, and operational parameters.
 
 | Mode | Access | When to use |
 | --- | --- | --- |
-| `read-only` | Read filesystem, no writes | Default. Safe for analysis, review |
-| `workspace-write` | Read + write within `--cwd` | Implementation tasks, file generation |
-| `danger-full-access` | Full system access | Only when explicitly authorized. `--full` forces this |
+| `danger-full-access` | Full system access | Default. Pre-tool-use hooks provide the safety guard |
+| `workspace-write` | Read + write within `--cwd` | Constrained implementation (use `--sandbox workspace-write`) |
+| `read-only` | Read filesystem, no writes | Analysis only (use `--sandbox read-only`) |
 
 Additional Codex flags:
 - `--network` / `-n`: Enable network access (forced by `--full`)
