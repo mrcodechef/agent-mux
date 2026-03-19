@@ -57,11 +57,11 @@ To register the `agent-mux` command globally: `bun link`
 
 ## Engines
 
-| Engine | SDK | Best At | Default Model |
-| --- | --- | --- | --- |
-| `codex` | `@openai/codex-sdk` | Precise implementation and code edits | `gpt-5.3-codex` |
-| `claude` | `@anthropic-ai/claude-agent-sdk` | Planning, architecture, long-form reasoning | `claude-sonnet-4-20250514` |
-| `opencode` | `@opencode-ai/sdk` | Model diversity and cross-checking | `openrouter/moonshotai/kimi-k2.5` |
+| Engine | SDK | Best At | Default Model | Other Models |
+| --- | --- | --- | --- | --- |
+| `codex` | `@openai/codex-sdk` | Precise implementation and code edits | `gpt-5.4` | `gpt-5.4-mini` (2x+ faster, 272K ctx), `gpt-5.3-codex-spark` (1000+ tok/s), `gpt-5.3-codex`, `gpt-5.2-codex` |
+| `claude` | `@anthropic-ai/claude-agent-sdk` | Planning, architecture, long-form reasoning | `claude-sonnet-4-20250514` | `claude-opus-4-6` |
+| `opencode` | `@opencode-ai/sdk` | Model diversity and cross-checking | `openrouter/moonshotai/kimi-k2.5` | See presets |
 
 ## CLI Reference
 Prompt is required as positional text:
@@ -103,7 +103,7 @@ Effort defaults:
 | Flag | Short | Values | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `--sandbox` |  | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
-| `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Reasoning effort |
+| `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Reasoning effort (maps to Codex `model_reasoning_effort`) |
 | `--network` | `-n` | boolean | `true` | Enabled by default |
 | `--codex-path` |  | path | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
 | `--add-dir` | `-d` | path (repeatable) | none | Additional writable dirs |

@@ -9,13 +9,13 @@ Detailed engine capabilities, configuration modes, and operational parameters.
 | Aspect | Codex | Claude | OpenCode |
 | --- | --- | --- | --- |
 | SDK | `@openai/codex` | `@anthropic-ai/claude-code` | `opencode` CLI |
-| Default model | `gpt-5.3-codex` | `claude-opus-4-6` | Varies by preset |
-| Model variants | `gpt-5.3-codex`, `gpt-5.3-codex-spark` | `claude-opus-4-6` | `kimi`, `glm-5`, `opencode-minimax`, `deepseek-r1`, `free` |
-| Speed | ~65-70 tok/s (Spark: 1000+ tok/s) | ~65-70 tok/s | Varies |
-| Context window | Standard (Spark: 128K) | 1M (beta) | 200-262K |
+| Default model | `gpt-5.4` | `claude-opus-4-6` | Varies by preset |
+| Model variants | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.3-codex`, `gpt-5.2-codex` | `claude-opus-4-6` | `kimi`, `glm-5`, `opencode-minimax`, `deepseek-r1`, `free` |
+| Speed | ~65-70 tok/s (Mini: 2x+ faster, Spark: 1000+ tok/s) | ~65-70 tok/s | Varies |
+| Context window | Standard (Mini: 272K, Spark: 128K) | 1M (beta) | 200-262K |
 | Best for | Implementation, debugging, code changes | Architecture, reasoning, synthesis, writing | Third opinion, model diversity, cost control |
-| SWE-Bench Pro | 56.8% (Spark: 56%) | N/A | 80% (minimax) |
-| Terminal-Bench | 77.3% (Spark: 58.4%) | N/A | N/A |
+| SWE-Bench Pro | `gpt-5.4`: 57.7%, `gpt-5.4-mini`: 54.4%, `gpt-5.3-codex`: 56.8%, Spark: 56% | N/A | 80% (minimax) |
+| Terminal-Bench | `gpt-5.3-codex`: 77.3%, `gpt-5.4`: 75.1%, `gpt-5.4-mini`: 60.0%, Spark: 58.4% | N/A | N/A |
 
 ---
 
@@ -41,7 +41,7 @@ Detailed engine capabilities, configuration modes, and operational parameters.
 Additional Codex flags:
 - `--network` / `-n`: Enable network access (forced by `--full`)
 - `--add-dir` / `-d`: Additional writable directories (repeatable)
-- `--reasoning` / `-r`: Reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`)
+- `--reasoning` / `-r`: Reasoning effort (`minimal`, `low`, `medium`, `high`, `xhigh`) — maps to Codex config key `model_reasoning_effort`
 
 ---
 

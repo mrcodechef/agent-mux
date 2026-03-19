@@ -43,6 +43,9 @@ For the full installation walkthrough (prerequisites, verification, troubleshoot
 # Codex: implementation, debugging, concrete code changes
 agent-mux --engine codex --cwd /repo --reasoning high --effort high "Implement retries in src/http/client.ts"
 
+# Codex Mini: cost-efficient, high-volume subagent tasks
+agent-mux --engine codex --model gpt-5.4-mini --cwd /repo --reasoning high "Review and fix error handling in src/api/"
+
 # Codex Spark: fast grunt work and broad scan/edit tasks
 agent-mux --engine codex --model gpt-5.3-codex-spark --cwd /repo --reasoning high "Add doc comments across src/"
 
@@ -81,9 +84,10 @@ agent-mux --engine claude --cwd /repo --coordinator reviewer --skill perf-audito
 Use this decision tree:
 
 1. Code execution, file edits, implementation -> **Codex** with `--reasoning high`.
-2. Fast grunt work, filesystem scanning, parallel worker throughput -> **Codex Spark** with `--model gpt-5.3-codex-spark`.
-3. Architecture, deep reasoning, multi-file analysis, synthesis, writing -> **Claude**.
-4. Model diversity, third-opinion checks, cost-flexible runs -> **OpenCode**.
+2. Cost-efficient subagent tasks, high-volume parallel work -> **Codex Mini** with `--model gpt-5.4-mini` (2x+ faster than 5.4, 272K context).
+3. Fast grunt work, filesystem scanning, parallel worker throughput -> **Codex Spark** with `--model gpt-5.3-codex-spark`.
+4. Architecture, deep reasoning, multi-file analysis, synthesis, writing -> **Claude**.
+5. Model diversity, third-opinion checks, cost-flexible runs -> **OpenCode**.
 
 _Note: Pratchett-OS coordinator uses Codex + Claude only._
 
@@ -119,7 +123,7 @@ Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
 | Flag | Short | Type | Values | Default | Notes |
 | --- | --- | --- | --- | --- | --- |
 | `--sandbox` | -- | string | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
-| `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort |
+| `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort (maps to Codex config key `model_reasoning_effort`) |
 | `--network` | `-n` | boolean | true/false | `true` | Enabled by default; `--full` also forces `true` |
 | `--codex-path` | -- | string | path to Codex binary | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
 | `--add-dir` | `-d` | string[] | repeatable paths | `[]` | Additional writable dirs |

@@ -48,7 +48,9 @@ Two engines. Match the right one to each step.
 
 **Claude Opus 4.6** (`--engine claude`) -- Natural orchestrator. Thrives on ambiguity, decides from available info. Fast, bold, occasionally overconfident on shortcuts. Best prompt writer. Use for: architecture, synthesis, open-ended exploration, prompt crafting.
 
-**Codex 5.3** (`--engine codex`) -- Precise executor. Pedantic, thorough, attentive to detail. Needs explicit scope -- one goal, specific files, explicit output path. No "explore" or "audit everything." Use `high` for implementation (sweet spot), `xhigh` only for deep audits (overthinks routine work).
+**Codex 5.4** (`--engine codex`) -- Precise executor. Pedantic, thorough, attentive to detail. Default model: `gpt-5.4`. Needs explicit scope -- one goal, specific files, explicit output path. No "explore" or "audit everything." Use `high` for implementation (sweet spot), `xhigh` only for deep audits (overthinks routine work). Previous models `gpt-5.3-codex` and `gpt-5.2-codex` are still allowed but not primary.
+
+**Codex Mini** (`--engine codex --model gpt-5.4-mini`) -- 2x+ faster than `gpt-5.4`, 272K context. Near-frontier quality (SWE-Bench Pro: 54.4%, Terminal-Bench: 60.0%) at lower cost. Use for: high-volume parallel workers, cost-efficient subagent tasks, batch operations where frontier quality isn't required.
 
 **Codex Spark** (`--engine codex --model gpt-5.3-codex-spark`) -- Same precision, 15x faster (1000+ tok/s). 128K context (smaller). Equivalent on straightforward coding, weaker on complex multi-step tasks. Use for: parallel workers, filesystem scanning, focused medium-difficulty tasks.
 
@@ -99,6 +101,7 @@ For any task, follow this sequence. Deviate when you have a reason.
 | Exploration, ambiguity resolution | Claude | Codex flounders without scope |
 | Precise implementation | Codex (`high`) | Pedantic, detail-oriented |
 | Deep architecture audit | Codex (`xhigh`) | Catches edge cases High misses |
+| High-volume parallel work, cost-efficient | Codex Mini (`gpt-5.4-mini`) | 2x+ faster, near-frontier quality, 272K context |
 | Fast parallel grunt work | Codex Spark | 15x speed; keep tasks focused |
 | Synthesis or documentation | Claude | Strong structured output |
 
