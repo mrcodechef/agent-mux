@@ -1,0 +1,150 @@
+package event
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestEmitEvent(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, logPath)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+
+	emitter.EmitDispatchStart("codex", "gpt-5.4")
+
+	// Read the event log
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %d", len(lines))
+	}
+
+	var evt Event
+	if err := json.Unmarshal([]byte(lines[0]), &evt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if evt.SchemaVersion != 1 {
+		t.Errorf("schema_version = %d, want 1", evt.SchemaVersion)
+	}
+	if evt.Type != "dispatch_start" {
+		t.Errorf("type = %q, want dispatch_start", evt.Type)
+	}
+	if evt.DispatchID != "01JQXYZ" {
+		t.Errorf("dispatch_id = %q, want 01JQXYZ", evt.DispatchID)
+	}
+	if evt.Salt != "coral-fox-nine" {
+		t.Errorf("salt = %q, want coral-fox-nine", evt.Salt)
+	}
+	if evt.Engine != "codex" {
+		t.Errorf("engine = %q, want codex", evt.Engine)
+	}
+	if evt.Timestamp == "" {
+		t.Error("ts should not be empty")
+	}
+}
+
+func TestEmitMultipleEvents(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, logPath)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+
+	emitter.EmitDispatchStart("codex", "gpt-5.4")
+	emitter.EmitToolStart("Read", "src/main.go")
+	emitter.EmitToolEnd("Read", 120)
+	emitter.EmitFileWrite("src/parser.go")
+	emitter.EmitCommandRun("go test ./...")
+	emitter.EmitDispatchEnd("completed", 45200)
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("expected 6 lines, got %d", len(lines))
+	}
+
+	expectedTypes := []string{"dispatch_start", "tool_start", "tool_end", "file_write", "command_run", "dispatch_end"}
+	for i, line := range lines {
+		var evt Event
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			t.Fatalf("unmarshal line %d: %v", i, err)
+		}
+		if evt.Type != expectedTypes[i] {
+			t.Errorf("line %d: type = %q, want %q", i, evt.Type, expectedTypes[i])
+		}
+	}
+}
+
+func TestHeartbeatTicker(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, logPath)
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+
+	stop, updateActivity := emitter.HeartbeatTicker(1) // 1 second for testing
+	updateActivity("reading files")
+
+	time.Sleep(1500 * time.Millisecond) // wait for at least 1 heartbeat
+	stop()
+
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 1 {
+		t.Fatal("expected at least 1 heartbeat event")
+	}
+
+	var evt Event
+	if err := json.Unmarshal([]byte(lines[0]), &evt); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	if evt.Type != "heartbeat" {
+		t.Errorf("type = %q, want heartbeat", evt.Type)
+	}
+	if evt.IntervalS != 1 {
+		t.Errorf("interval_s = %d, want 1", evt.IntervalS)
+	}
+	if evt.LastActivity != "reading files" {
+		t.Errorf("last_activity = %q, want 'reading files'", evt.LastActivity)
+	}
+}
+
+func TestEmitterWithoutLog(t *testing.T) {
+	emitter, err := NewEmitter("01JQXYZ", "coral-fox-nine", false, "")
+	if err != nil {
+		t.Fatalf("NewEmitter: %v", err)
+	}
+	defer emitter.Close()
+
+	// Should not panic even without log file
+	emitter.EmitDispatchStart("codex", "gpt-5.4")
+}
