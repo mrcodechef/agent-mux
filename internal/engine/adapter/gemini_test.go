@@ -11,7 +11,7 @@ func TestGeminiBuildArgs(t *testing.T) {
 	a := &GeminiAdapter{}
 
 	spec := &types.DispatchSpec{
-		Model:        "gemini-3.1-pro",
+		Model:        "gemini-2.5-pro",
 		Prompt:       "Build the parser",
 		SystemPrompt: "ignored here",
 	}
@@ -22,7 +22,7 @@ func TestGeminiBuildArgs(t *testing.T) {
 	assertContains(t, args, "-o")
 	assertContains(t, args, "stream-json")
 	assertContains(t, args, "-m")
-	assertContains(t, args, "gemini-3.1-pro")
+	assertContains(t, args, "gemini-2.5-pro")
 	assertContains(t, args, "--approval-mode")
 	assertContains(t, args, "yolo")
 	promptIndex := indexOf(args, "-p")
@@ -96,7 +96,7 @@ func indexOf(values []string, want string) int {
 func TestGeminiParseInit(t *testing.T) {
 	a := &GeminiAdapter{}
 
-	line := `{"type":"init","session_id":"gem-session-789xyz","model":"gemini-3.1-pro"}`
+	line := `{"type":"init","session_id":"gem-session-789xyz","model":"gemini-2.5-pro"}`
 	evt, err := a.ParseEvent(line)
 	if err != nil {
 		t.Fatalf("ParseEvent: %v", err)

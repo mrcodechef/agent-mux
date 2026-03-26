@@ -77,7 +77,7 @@ max_depth = 7
 
 [roles.reviewer]
 engine = "gemini"
-model = "gemini-3.1-pro"
+model = "gemini-2.5-pro"
 effort = "medium"
 `)
 
@@ -100,7 +100,7 @@ effort = "medium"
 	if companion.Defaults.MaxDepth != 7 {
 		t.Fatalf("companion Defaults.MaxDepth = %d, want %d", companion.Defaults.MaxDepth, 7)
 	}
-	if role := companion.Roles["reviewer"]; role.Engine != "gemini" || role.Model != "gemini-3.1-pro" || role.Effort != "medium" {
+	if role := companion.Roles["reviewer"]; role.Engine != "gemini" || role.Model != "gemini-2.5-pro" || role.Effort != "medium" {
 		t.Fatalf("companion reviewer role = %#v, want decoded role", role)
 	}
 }

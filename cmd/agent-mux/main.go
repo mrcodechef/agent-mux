@@ -730,7 +730,7 @@ func configuredModels(cfg *config.Config) map[string][]string {
 		models["claude"] = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
 	}
 	if len(models["gemini"]) == 0 {
-		models["gemini"] = []string{"gemini-3.1-pro", "gemini-3.1-flash"}
+		models["gemini"] = []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview"}
 	}
 	return models
 }
