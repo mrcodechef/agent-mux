@@ -1,402 +1,214 @@
 ---
 name: agent-mux
 description: |
-  Dispatch layer that bridges AI coding harnesses — Codex, Claude, and
-  Gemini — through one JSON contract and one CLI. Use this skill when you
-  need to: spawn a worker agent across any engine, run a TOML-defined
-  pipeline, recover or signal a live dispatch, parse schema_version:1
-  JSON output contracts, configure roles/variants/pipelines in TOML,
-  inject skills or coordinator personas, or coordinate multi-model tasks.
-  Covers: role-based CLI dispatch (-R flag), JSON --stdin for complex
-  dispatches, preview preflight verification, variant selection, pipeline
-  orchestration with fan-out and handoff modes, recovery continuation,
-  mid-flight signaling, hooks, event streaming, output contract parsing
-  (dispatch + pipeline + signal), timeout alignment, liveness supervision,
-  and context-loading tools.
-  Keywords: subagent, dispatch, worker, codex, claude, gemini, pipeline,
-  role, variant, recover, signal, agent-mux, spawn agent, engine, multi-model,
-  TOML config, fan-out, handoff, orchestration, coordinate workers.
+  Dispatch workers across Codex, Claude, and Gemini through one CLI and one
+  JSON contract. Tool, not orchestrator — the LLM decides; agent-mux dispatches.
+  Use for: spawning workers, running pipelines, recovering timed-out dispatches,
+  parsing output contracts, and multi-model coordination.
+  Keywords: subagent, dispatch, worker, codex, claude, gemini, pipeline, role,
+  variant, recover, signal, agent-mux, spawn agent, engine, multi-model.
 ---
 
 # agent-mux
 
-The dispatch substrate that lets any LLM coordinate any other LLM. One CLI,
-one JSON contract, three engines (Codex, Claude, Gemini). TOML-driven roles,
-variants, and pipelines turn good dispatch practices into reusable config.
-The calling LLM decides what to do — agent-mux handles the how.
+Dispatch substrate. One CLI, one JSON contract, three engines. TOML-driven
+roles encode engine + model + effort + timeout + skills into one flag. The
+calling LLM decides what to do — agent-mux handles the how.
 
-## Why agent-mux Exists
+## 1. First Action
 
-Three problems motivated building this:
+> "What roles and pipelines are available?"
 
-1. **Claude Code cannot natively use Codex as a subagent.** agent-mux bridges
-   that gap — Claude architects a plan, dispatches implementation to Codex,
-   and verifies the result, all through one CLI.
+```bash
+agent-mux config roles       # live role catalog with engines/models/timeouts
+agent-mux config pipelines   # named multi-step workflows
+agent-mux config models      # valid models per engine
+agent-mux config --sources   # which config files are loaded
+```
 
-2. **Codex has no subagent system at all.** agent-mux gives it orchestration
-   primitives — pipelines, fan-out, recovery — without baking orchestration
-   logic into Codex itself.
+## 2. Dispatch Pattern Selection
 
-3. **The 10x pattern needs a coordinator.** The highest-leverage workflow is
-   Claude architects, Codex executes, Claude verifies. agent-mux makes that
-   loop a single pipeline invocation instead of manual session juggling.
+> "Which invocation shape fits my task?"
 
-These three problems collapse into one design:
-
-**Tool, not orchestrator.** agent-mux is a dispatch layer where the LLM makes
-all decisions. Roles and pipelines are presets that condense good practices
-into config — the LLM decides when and how to use them. No orchestration
-logic is baked into the binary.
-
-**Job done is holy.** Never discard completed work. Timeout kills the process,
-not the artifacts. Every dispatch has an artifact path. Workers write
-incrementally. Recovery is first-class.
-
-**Errors are steering signals.** Every error is crafted for the calling LLM to
-self-correct — what failed, why, what to try next. Not generic status codes.
-
-**Single-shot with curated context.** One well-prompted dispatch with narrow
-context beats a swarm of under-specified workers. Orchestration is explicit
-escalation, not baseline.
-
-**Config over code.** Roles, pipelines, models, timeouts — all in TOML. The
-Go binary is generic; the config makes it specific.
-
-**Simplest viable dispatch.** If it can be a CLI call, it stays a CLI call.
-If it can be config, it stays config. Code is the last resort.
-
----
-
-## Invocation Hierarchy
-
-### Primary: Role-based CLI
-
-For simple, single-role dispatches — the common case:
-
+**Role CLI** (`-R=role`) — You know the role. This is the common case.
 ```bash
 agent-mux -R=lifter -C=/repo "Implement retries in src/http/client.ts"
 ```
 
-Why primary: roles encapsulate engine/model/effort/timeout/skills — one flag
-replaces six. Readable in logs, scripts, and agent output.
-
-### Complex dispatches: JSON via --stdin
-
-When you need multiple overrides, pipeline params, recovery context, or
-programmatic construction:
-
+**JSON stdin** (`--stdin`) — Multiple overrides, programmatic construction, or
+recovery context. When CLI flags become unreadable.
 ```bash
-printf '{"role":"lifter","variant":"claude","skills":["react"],"context_file":"design.md","prompt":"...","cwd":"/repo"}' | agent-mux --stdin
+printf '{"role":"lifter","variant":"claude","skills":["react"],"prompt":"...","cwd":"/repo"}' | agent-mux --stdin
 ```
 
-Why JSON: when the dispatch has enough parameters that CLI flags become
-unreadable, or when constructing the dispatch programmatically.
-
-### Escape hatch: raw flags
-
-When no role fits:
-
+**Raw flags** (`-E= -m=`) — No role fits. Escape hatch.
 ```bash
 agent-mux -E=codex -m=gpt-5.4 -e=high -C=/repo "one-off task"
 ```
 
----
-
-## Verification via Preview
-
-Agents MUST NOT fire-and-forget non-trivial dispatches. The `preview`
-subcommand is the native verification gate.
-
-**Step 1 — Construct.** Build the dispatch command (CLI or JSON).
-
-**Step 2 — Preview.** Use `agent-mux preview` to see the resolved plan:
-
+**Named pipeline** (`-P=name`) — Multi-step workflow defined in config.
+Invoke-only; see [references/pipeline-guide.md](references/pipeline-guide.md)
+for authoring.
 ```bash
-agent-mux preview -R=lifter -C=/repo "Implement retries"
+agent-mux -P=build -C=/repo "Redesign the auth flow"
 ```
 
-This outputs the full resolved DispatchSpec (engine, model, effort, timeout,
-system prompt, skills) as JSON WITHOUT executing. The agent reviews the plan.
+## 3. Engine Cognitive Styles
 
-For JSON dispatches:
+> "Which engine for this task?"
 
-```bash
-printf '{"role":"lifter","prompt":"...","cwd":"/repo"}' | agent-mux preview --stdin
-```
+**Claude** resolves ambiguity. Planning, synthesis, review, prompt crafting.
+Roles: `architect`, `researcher`. Watch for: skipping validation, over-abstraction.
 
-**Step 3 — Execute.** After confirming the plan looks right, run without
-`preview`:
+**Codex** executes precision. Implementation, debugging, focused audits. Needs
+surgical scope — one goal, specific files, explicit gate. Roles: `lifter`,
+`auditor`, `scout`. Watch for: paralysis on underspecified prompts.
 
-```bash
-agent-mux -R=lifter -C=/repo "Implement retries"
-```
+**Gemini** provides contrast. Different training, different blind spots. Use as
+second opinion or challenge probe. All variants are reasoning-only on this
+machine — no file reads, no tool calls. All context must be in the prompt.
 
-The key insight: `preview` is a native verification gate built into the
-binary. Agents SHOULD use it for non-trivial dispatches — unfamiliar roles,
-complex overrides, pipeline construction. For routine role-based dispatches
-with well-known roles, showing the command inline is sufficient.
+**Meta-rule:** If you're sending exploration to Codex or precision execution to
+Claude, reconsider.
 
----
+**Known limitation:** Skill `scripts/` directories only reach Codex workers
+currently (Claude/Gemini adapters don't wire `addDirs`). Skill path resolution
+is relative to `--cwd` — when dispatching from unusual cwd, pass explicit
+`-C=` pointing to the repo root.
 
-## Role-Based Dispatch (Preferred)
+## 4. Role Quick-Reference
 
-Roles are the primary dispatch mechanism. A role resolves engine, model,
-effort, timeout, skills, and system prompt from config.toml.
+> "Which role matches this task?"
 
-```json
-{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/repo"}
-```
+**Scanning:** `scout` (fast, mini) | `explorer` (deep, multi-file, KB-aware)
+**Implementation:** `lifter` (standard) | `lifter-deep` (xhigh, hard problems)
+**Cheap parallel:** `grunt` (mini) | `batch` (mini, high-volume)
+**Research:** `researcher` (Claude, external) | `explorer` (Codex, internal KB)
+**Architecture:** `architect` (Claude, strategic reasoning)
+**Verification:** `auditor` (Codex xhigh, adversarial review)
+**Writing:** `writer` (Codex, voice-matched, full publishing pipeline)
+**Specialized:** `handoff-extractor` (session handoff extraction)
 
-### Live Role Catalog (from coordinator config.toml)
+Variants swap the engine within a role: `-R=lifter --variant=claude`. Common
+variants: `claude`, `gemini`, `mini`, `spark`. Run `agent-mux config roles`
+for the live catalog with all engines, models, timeouts, and variants.
 
-| Role | Engine | Model | Effort | Timeout | Purpose |
-|------|--------|-------|--------|---------|---------|
-| `scout` | codex | gpt-5.4-mini | low | 180s | Quick scans, file discovery |
-| `explorer` | codex | gpt-5.4 | high | 600s | Deep read, multi-file analysis |
-| `researcher` | claude | claude-opus-4-6 | high | 900s | Web search, synthesis, analysis |
-| `architect` | claude | claude-opus-4-6 | high | 900s | Design, planning, architecture |
-| `lifter` | codex | gpt-5.4 | high | 1800s | Implementation, code changes |
-| `lifter-deep` | codex | gpt-5.4 | xhigh | 2400s | Complex implementation, deep work |
-| `grunt` | codex | gpt-5.4-mini | medium | 600s | Cheap parallel workers |
-| `batch` | codex | gpt-5.4-mini | high | 900s | High-volume batch processing |
-| `auditor` | codex | gpt-5.4 | xhigh | 2700s | Verification, code audit |
-| `writer` | codex | gpt-5.4 | high | 1500s | Blog posts, documentation |
-| `handoff-extractor` | codex | gpt-5.4-mini | high | 120s | Session handoff extraction |
+## 5. Dispatch Flow
 
-### Variants — Engine Swaps Within a Role
+> "What's the sequence every dispatch follows?"
 
-Variants let you keep the same role semantics but swap the engine:
+1. **Construct command.** Pick pattern from section 2. Role is preferred.
+2. **Preview** (for non-trivial dispatches):
+   ```bash
+   agent-mux preview -R=lifter -C=/repo "Complex task"
+   ```
+   Outputs the resolved DispatchSpec as JSON without executing. Review engine,
+   model, skills, timeout. Skip for routine dispatches with well-known roles.
+3. **Execute.** Run without `preview`. Parse stdout JSON.
+4. **Parse output.** Check the 4 critical fields (section 6).
+5. **Verify.** Does the result satisfy the task's verification gate?
+6. **Recover if needed.** Follow section 7 decision tree.
 
-```json
-{"role":"lifter","variant":"claude","prompt":"...","cwd":"/repo"}
-```
+## 6. Output Parsing
 
-Common variants across roles: `claude`, `gemini`, `mini`, `spark`.
-See [references/config-guide.md](references/config-guide.md) for the full
-variant table.
+> "What do I check in the response?"
 
-### Raw Override (Escape Hatch)
+**Single dispatch** — 4 fields to check:
+- `status`: `completed` | `timed_out` | `failed`. Never treat non-completed as done.
+- `response`: The worker's answer. Check it's non-empty and not a placeholder.
+- `response_truncated` + `full_output_path`: If truncated, read the full file.
+- `activity.files_changed`: What the worker actually modified.
 
-When no role fits, specify engine/model/effort directly:
+**Pipeline** returns `PipelineResult`, not `DispatchResult`:
+- `status`: `completed` | `partial` | `failed`
+- `steps[]`: Per-step worker results with `summary` and `artifact_dir`
+- `final_step`: The last step's output
 
-```json
-{"engine":"codex","model":"gpt-5.4","effort":"high","prompt":"...","cwd":"/repo"}
-```
-
-This is the escape hatch, not the default path.
-
----
-
-## Core Dispatch Modes
-
-### 1. Single Dispatch
-
-```json
-{"role":"lifter","prompt":"Build the auth middleware","cwd":"/repo"}
-```
-
-### 2. Pipeline
-
-```json
-{"pipeline":"build","prompt":"Redesign the auth flow","cwd":"/repo","engine":"codex"}
-```
-
-Pipeline mode returns a different JSON shape. See
+Always parse JSON from stdout. Never parse as text. For full schemas:
 [references/output-contract.md](references/output-contract.md).
 
-### 3. Recovery
+## 7. Failure Recovery
 
-Continue a timed-out or interrupted dispatch:
+> "The dispatch failed or timed out. What now?"
 
-```json
-{"engine":"codex","continues_dispatch_id":"01KM...","prompt":"Finish the remaining tests","cwd":"/repo"}
+```
+status?
+ timed_out + files_changed non-empty
+   -> --recover=<dispatch_id> with continuation prompt (the delta, not re-brief)
+ timed_out + files_changed empty
+   -> Prompt too broad. Reframe with tighter scope. Retry ONCE.
+ timed_out + heartbeat_count == 0
+   -> Worker never started. Config error. Check and retry once.
+ failed + error.retryable
+   -> Fix cause (wrong flag, missing --network). Retry ONCE.
+ failed + not retryable
+   -> Structural. Escalate.
+ Second failure on same step
+   -> STOP. Problem is the prompt or the scope, not the effort level.
+      Reframe entirely or escalate.
 ```
 
-### 4. Signal
-
-Send a steering message to a running dispatch:
-
+**Signal for mid-flight steering** (running dispatch only):
 ```bash
-agent-mux --signal=01KM... "Focus on auth paths; skip tests"
+agent-mux --signal=<dispatch_id> "Narrow scope to parser module only"
 ```
+Ack confirms inbox write, not delivery. Keep signals to one crisp sentence.
+See [references/recovery-signal.md](references/recovery-signal.md) for
+mechanics.
 
-Signal returns a compact JSON ack. Actual injection happens at an event
-boundary when the harness has a resumable session/thread ID.
+## 8. Codex Prompt Discipline
 
----
+> "How do I get clean output from Codex?"
 
-## Output Contract Summary
+Codex output quality is a direct function of prompt specificity. Rules:
 
-All output goes to `stdout` as JSON (`schema_version: 1`).
+1. **Exact file paths.** Never "explore src/". If unknown, scout first.
+2. **Inline critical context.** The function, the type, the error — not "read file X".
+3. **One deliverable.** "Write X to Y" or "modify Z in W". Not "audit and fix."
+4. **Word budget.** "3-sentence summary" or "file path + verdict only."
+5. **State the verification gate.** How the worker proves it's done.
+6. **Use `--context-file` for bulk.** Don't inline giant specs into the prompt.
+7. **Pass `--network`/`-n` for web access.** Codex sandbox is offline by default.
 
-### Dispatch Result
+BAD: `"Read all files in src/auth/ and identify issues"`
+GOOD: `"In src/auth/middleware.go:45-80, validateToken() doesn't handle expired
+refresh tokens. Add a check at line 67. refreshToken is at src/auth/refresh.go:12-30."`
 
-```json
-{
-  "schema_version": 1,
-  "status": "completed",
-  "dispatch_id": "01KM...",
-  "dispatch_salt": "mint-ant-five",
-  "trace_token": "AGENT_MUX_GO_01KM...",
-  "response": "...",
-  "response_truncated": false,
-  "full_output": null,
-  "handoff_summary": "...",
-  "artifacts": [],
-  "partial": false,
-  "recoverable": false,
-  "reason": "",
-  "error": null,
-  "activity": {"files_changed":[],"files_read":[],"commands_run":[],"tool_calls":[]},
-  "metadata": {"engine":"codex","model":"gpt-5.4","role":"lifter","tokens":{"input":0,"output":0,"reasoning":0,"cache_read":0,"cache_write":0},"turns":0,"cost_usd":0,"session_id":""},
-  "duration_ms": 12345
-}
-```
+## 9. Timeout Alignment
 
-**Status values:** `completed`, `timed_out`, `failed`
+> "My wrapper kills the process before agent-mux can clean up."
 
-Callers MUST check `status` before treating output as final. A `timed_out`
-result may still have useful `response` and `artifacts`.
-
-### Pipeline Result
-
-```json
-{
-  "pipeline_id": "01KM...",
-  "status": "completed",
-  "steps": [...],
-  "final_step": {...},
-  "duration_ms": 12345
-}
-```
-
-**Pipeline status:** `completed`, `partial`, `failed`
-
-For full schemas with all fields, see
-[references/output-contract.md](references/output-contract.md).
-
----
-
-## Engine Selection
-
-| Use case | Role | Engine |
-|----------|------|--------|
-| Implementation, code edits, debugging | `lifter` | codex |
-| Cheap high-volume parallel work | `grunt` | codex (mini) |
-| Fast scans, light edits | `grunt` variant `spark` | codex (spark) |
-| Architecture, synthesis, planning | `architect` | claude |
-| Deep analysis, web research | `researcher` | claude |
-| Second opinion, contrast check | any role + `gemini` variant | gemini |
-| Code audit, verification | `auditor` | codex |
-
-For engine-specific prompting tips and model details, see
-[references/engine-comparison.md](references/engine-comparison.md) and
-[references/prompting-guide.md](references/prompting-guide.md).
-
----
-
-## Timeout Alignment
-
-When wrapping agent-mux in another process (Claude Code Task, shell timeout),
-the wrapper MUST exceed agent-mux timeout by at least 60 seconds.
-
-```
-wrapper_timeout = agent_mux_timeout + 60_000ms
-```
+Wrapper timeout MUST exceed agent-mux timeout by at least 60 seconds.
 
 | Effort | agent-mux timeout | Wrapper minimum |
 |--------|-------------------|-----------------|
-| `low` | 120s | 180s |
-| `medium` | 600s | 660s |
-| `high` | 1800s | 1860s |
-| `xhigh` | 2700s | 2760s |
+| `low` | 120s | 180s (180000ms) |
+| `medium` | 600s | 660s (660000ms) |
+| `high` | 1800s | 1860s (1860000ms) |
+| `xhigh` | 2700s | 2760s (2760000ms) |
 
-Roles set their own timeouts. Check the role catalog above or
-[references/config-guide.md](references/config-guide.md).
+Roles set their own timeouts. Check with `agent-mux config roles`.
 
----
+## 10. Anti-Patterns
 
-## DispatchSpec Fields (--stdin JSON)
+- **Raw engine/model/effort when a role fits.** Roles exist. Use them.
+- **Fire-and-forget non-trivial dispatches.** Preview first.
+- **`--permission-mode` with Codex.** Use `--sandbox` instead.
+- **Exploration prompts to Codex.** Use Claude for open-ended work.
+- **Wrapper timeout == worker timeout.** Add 60s slack.
+- **Ignoring `status` field.** `timed_out` is not `completed`.
+- **Pipeline output parsed as DispatchResult.** Different JSON shape.
 
-Essential fields for JSON dispatch:
+## 11. Reference Index
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `prompt` | string | yes | The task prompt |
-| `cwd` | string | yes | Working directory |
-| `role` | string | preferred | Resolves engine/model/effort/timeout from config |
-| `variant` | string | no | Engine swap within a role |
-| `engine` | string | role or this | `codex`, `claude`, `gemini` |
-| `model` | string | no | Override role's model |
-| `effort` | string | no | `low`, `medium`, `high`, `xhigh` |
-| `system_prompt` | string | no | Appended system context |
-| `skills` | string[] | no | Skill names to inject |
-| `pipeline` | string | no | Named pipeline from config |
-| `context_file` | string | no | Path to large context file |
-| `timeout_sec` | int | no | Override timeout in seconds |
-| `continues_dispatch_id` | string | no | Recovery: prior dispatch ID |
-| `profile` | string | no | Coordinator persona name |
-| `response_max_chars` | int | no | Truncate response (default 16000) |
-| `full_access` | bool | no | Default true |
-| `allow_subdispatch` | bool | no | Default true |
-| `max_depth` | int | no | Recursive depth limit (default 2) |
+> "Where do I go for deeper detail?"
 
-For the complete field reference including pipeline-internal fields, see
-[references/cli-flags.md](references/cli-flags.md).
-
----
-
-## Anti-Patterns
-
-- **Do not parse output as text.** Always parse JSON from stdout.
-- **Do not assemble raw engine/model/effort combos when a role fits.** Use roles.
-- **Do not fire-and-forget non-trivial dispatches.** Use `preview` first.
-- **Do not skip `preview` for unfamiliar roles or complex overrides.**
-- **Do not use `--permission-mode` with Codex.** Use `--sandbox` instead.
-- **Do not send exploration prompts to Codex.** Use Claude for open-ended work.
-- **Do not make wrapper timeout equal to worker timeout.** Add 60s slack.
-- **Do not treat `--signal` ack as proof of delivery.** It confirms inbox
-  write only.
-- **Do not ignore `status` field.** A `timed_out` result is not `completed`.
-- **Do not assume pipeline output has dispatch fields.** Pipeline returns
-  `PipelineResult`, not `DispatchResult`.
-- **Do not use `xhigh` effort for routine tasks.** `high` is the workhorse.
-- **Do not inline giant context blobs.** Use `--context-file` or `--skill`.
-
----
-
-## Quick Reference
-
-```bash
-# Scout: quick scan
-agent-mux -R=scout -C=/repo "Find all TODO markers"
-
-# Lifter: implementation
-agent-mux -R=lifter -C=/repo "Implement the auth middleware"
-
-# Researcher: deep analysis
-agent-mux -R=researcher -C=/repo "Analyze the performance bottleneck in src/api/"
-
-# Variant: swap engine within role
-agent-mux -R=lifter --variant=claude -C=/repo "Refactor with architecture awareness"
-
-# Preview before execute
-agent-mux preview -R=lifter -C=/repo "Complex task"
-
-# Complex dispatch via JSON
-printf '{"role":"lifter","pipeline":"build","prompt":"...","cwd":"/repo"}' | agent-mux --stdin
-```
-
----
-
-## Bundled References
-
-| Path | Read when |
-|------|-----------|
-| [references/cli-flags.md](references/cli-flags.md) | You need the complete flag table or DispatchSpec field reference |
-| [references/config-guide.md](references/config-guide.md) | You need TOML config structure, role/variant definitions, config resolution order |
-| [references/output-contract.md](references/output-contract.md) | You need exact JSON schemas for dispatch, pipeline, signal, events, error codes |
-| [references/engine-comparison.md](references/engine-comparison.md) | You need engine-specific behavior, harness details, permission/sandbox mapping |
-| [references/prompting-guide.md](references/prompting-guide.md) | You are crafting prompts, writing pipeline steps, phrasing recovery/signals |
-| [references/pipeline-guide.md](references/pipeline-guide.md) | You need pipeline TOML structure, fan-out, handoff modes, step chaining |
-| [references/recovery-signal.md](references/recovery-signal.md) | You need recovery continuation, signal delivery, artifact directory layout |
+| Reference | Read when |
+|-----------|-----------|
+| [cli-flags.md](references/cli-flags.md) | You need the complete flag table or DispatchSpec JSON fields |
+| [config-guide.md](references/config-guide.md) | You need TOML structure, variant tables, config resolution order |
+| [output-contract.md](references/output-contract.md) | You need exact JSON schemas for dispatch, pipeline, signal, events |
+| [engine-comparison.md](references/engine-comparison.md) | You need engine harness details, permission/sandbox mapping |
+| [prompting-guide.md](references/prompting-guide.md) | You are crafting prompts, writing pipeline steps, phrasing recovery |
+| [pipeline-guide.md](references/pipeline-guide.md) | You need pipeline TOML structure, fan-out, handoff modes |
+| [recovery-signal.md](references/recovery-signal.md) | You need recovery continuation, signal delivery, artifact layout |
