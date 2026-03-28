@@ -1,0 +1,224 @@
+# agent-mux v3 Spec — Post-Dispatch Lifecycle & Hardening
+
+**Date:** 2026-03-28
+**Status:** Draft
+**Context:** Findings from a 10+ dispatch coordination session, Codex xhigh audit, and TS/Go harness research.
+
+---
+
+## 1. Output Contract Fix
+
+### Problem
+
+The documented contract says "single JSON object on stdout." The code at `main.go:476` correctly calls `writeResult(stdout, result)`. Yet in observed behavior across 10+ dispatches, stdout was consistently empty and the result JSON appeared on stderr.
+
+**Investigation needed:** The code path looks correct. Possible causes:
+- Early error exits that write to stderr and skip the writeResult call (auditor found "many early failures print plain text to stderr with no JSON")
+- The `--yes` flag interaction — preview is written to stderr unconditionally when `--yes` is false
+- Interaction between `--stdin` mode and the confirmation flow
+- Error paths in pipeline/signal/recover modes that bypass writeResult
+
+### Fix
+
+1. **Audit every exit path** in `main.go` — ensure EVERY terminal state (success, error, timeout, config error, hook deny) writes a valid JSON result to stdout. Zero plain-text stderr exits.
+2. **Centralize result emission** behind one function: `emitResult(stdout, result)`. All paths call it. No direct `fmt.Fprintf(stderr, ...)` for terminal states.
+3. **`--yes` should be the default for `--stdin` mode.** When input comes from stdin (programmatic), skip the interactive preview. Preview is for TTY use.
+4. **Test:** `printf '{"engine":"codex","prompt":"echo hello","cwd":"/tmp"}' | agent-mux --stdin | jq .status` must produce `"completed"` or `"failed"` — never empty.
+
+### Reference
+
+v1 got this right: `console.log(JSON.stringify(result))` — one line, always stdout, every path. The Go version should match this simplicity.
+
+---
+
+## 2. Post-Dispatch Lifecycle Commands
+
+### Problem
+
+After a dispatch completes, the caller is alone with raw JSON files in `/tmp/agent-mux/<dispatch_id>/`. No built-in way to check status, extract the response, or list past dispatches. This session required custom Python scripts for every result inspection.
+
+### Existing Infrastructure (no new storage needed)
+
+| Source | What's there | Records |
+|--------|-------------|---------|
+| `/tmp/agent-mux/<id>/_dispatch_meta.json` | Full lifecycle: id, salt, trace_token, status, engine, model, timestamps, cwd, artifacts | 259 dispatch dirs |
+| `/tmp/agent-mux/control/<id>.json` | Lightweight pointer: id, artifact_dir, salt, trace_token | 260 records |
+| `/tmp/agent-mux/<id>/full_output.md` | Full response when truncated | Written on truncation |
+| `/tmp/agent-mux/<id>/events.jsonl` | Full NDJSON event stream | Every dispatch |
+| Gaal `find-salt` | Maps dispatch_salt → harness session → full transcript | Confirmed working |
+
+### Proposed Commands
+
+**`agent-mux list`**
+Scan `/tmp/agent-mux/*/_dispatch_meta.json`. Output table:
+
+```
+ID              SALT            STATUS     ENGINE  MODEL       DURATION  CWD
+01KMT0WYB55F    quick-newt-zero completed  codex   gpt-5.4     824s     /Users/.../agent-mux
+01KMT253Q3NZ    fair-ant-nine   completed  codex   gpt-5.4     217s     /Users/.../agent-mux
+```
+
+Flags: `--status=completed|failed|timed_out`, `--engine=codex|claude|gemini`, `--limit=N`, `--json`
+
+**`agent-mux status <dispatch_id>`**
+Read `_dispatch_meta.json`. Output:
+
+```
+Status:    completed
+Engine:    codex / gpt-5.4
+Duration:  824s
+Started:   2026-03-28T13:45:00Z
+Truncated: true
+Artifacts: 3 files
+Salt:      quick-newt-zero
+```
+
+Accept short IDs (prefix match against control records).
+
+**`agent-mux result <dispatch_id>`**
+Extract and print the response text:
+- If `full_output.md` exists (truncated): print that
+- Otherwise: read the result JSON from the dispatch, print `.response`
+- `--json` flag: print the full result JSON instead
+- `--artifacts` flag: list artifact files
+
+**`agent-mux inspect <dispatch_id>`**
+Bridge to gaal: read `dispatch_salt` from meta → `gaal find-salt <salt>` → `gaal inspect <session_id>`. Surfaces: tokens, peak context, tool counts, file attribution, full transcript. Falls back to local `events.jsonl` if gaal isn't available.
+
+### Design Principles
+
+- **No new storage.** Everything reads from `/tmp/agent-mux/` which already exists.
+- **Short IDs.** Accept prefix matches (first 8+ chars of dispatch_id). Control records enable fast lookup.
+- **Gaal is the deep inspector.** agent-mux owns the dispatch lifecycle; gaal owns the session transcript. The salt is the bridge. Don't duplicate gaal's indexing.
+- **`-o=json` everywhere.** All lifecycle commands support `--json` for programmatic consumption.
+
+---
+
+## 3. Response Truncation Rethink
+
+### Problem
+
+`response_max_chars` defaults to 2000. Auditor and research dispatches get silently truncated. The caller sees `response_truncated: true` but must manually find and read `full_output.md`.
+
+### Fix
+
+1. **Raise default to 16000.** LLM context windows are 128K-1M tokens. 2000 chars is absurdly conservative.
+2. **`response_max_chars: 0` disables truncation entirely.** For callers who want the full response inline.
+3. **Include `full_output_path` in result JSON when truncated.** Currently the caller must construct the path from dispatch_id. The result should tell them where to find it.
+4. **Emit a `response_truncated` event** on the stderr event stream when truncation occurs, with the full_output path.
+5. **`agent-mux result <id>` always returns the full response** — it transparently reads full_output.md when the dispatch was truncated.
+
+---
+
+## 4. Security Hardening (Path Traversal & Input Sanitization)
+
+### Source
+
+Codex xhigh audit found 5 HIGH and 8 MEDIUM issues. A 792-line implementation plan exists at `/tmp/agent-mux-docs/security-fix-plan.md`.
+
+### Summary of Fixes
+
+**New package: `internal/sanitize/`**
+
+```go
+func ValidateDispatchID(id string) error    // reject ../, separators, empty, >128 bytes
+func ValidateBasename(name string) error     // for skill/profile names
+func SafeJoinPath(root, child string) error  // verify result stays under root
+func SecureArtifactRoot() string             // per-user runtime dir, 0700
+```
+
+**Issue-by-issue:**
+
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | dispatch_id path traversal | `ValidateDispatchID` at stdin parse + CLI flag parse |
+| 2 | Shared /tmp with predictable paths | `SecureArtifactRoot()` → `$XDG_RUNTIME_DIR/agent-mux/` or `/tmp/agent-mux-$UID/` with 0700 |
+| 3 | Hook bypass via system_prompt | Run hooks on combined `Prompt + SystemPrompt`, constrain `system_prompt_file` to config root |
+| 4 | Skill/profile path traversal | `ValidateBasename` before path join |
+| 5 | Config merge SourceDir ambiguity | Resolve `system_prompt_file` to absolute path during config load, not at dispatch time |
+
+### Behavioral Changes
+
+- Existing dispatch_ids with `/` or `..` will be rejected (breaking but necessary)
+- Artifact root moves from `/tmp/agent-mux/` to per-user dir (existing dispatches in old location remain readable via fallback)
+- Hook deny now checks system prompt content (previously only user prompt)
+
+---
+
+## 5. Additional Audit Findings
+
+### Contract Issues
+
+| # | Issue | Severity | Fix |
+|---|-------|----------|-----|
+| 8 | Pipeline setup errors emit DispatchResult, success emits PipelineResult, no schema_version on PipelineResult | MEDIUM | Unified versioned pipeline envelope |
+| 9 | Plain-text stderr exits violate JSON contract | MEDIUM | Centralized result emitter (covered in §1) |
+| 10 | Inbox delimiter poisoning (`\n---\n` in signals splits messages) | MEDIUM | Switch to NDJSON or length-prefixed framing |
+| 12 | Negative timeout disables enforcement | MEDIUM | Reject non-positive timeout/grace at parse time |
+
+### Gemini Adapter
+
+| # | Issue | Severity | Fix |
+|---|-------|----------|-----|
+| 11 | Malformed NDJSON + exit 0 → reports "completed" | MEDIUM | Track parse errors as terminal failures |
+| 13 | Silent system prompt drop on write failure | MEDIUM | Surface error, fail dispatch setup |
+
+### Correctness
+
+| # | Issue | Severity | Fix |
+|---|-------|----------|-----|
+| 5 | Orphan processes on SIGKILL (no parent-death reaper) | HIGH | Platform-specific reaper (Linux: PR_SET_PDEATHSIG, macOS: kqueue EVFILT_PROC) |
+| 14 | Non-atomic `_dispatch_meta.json` writes | MEDIUM | Write via temp file + rename |
+| 15 | Dead parameters (`workerIdx`, `stepIdx`) | LOW | Remove |
+
+### Docs Drift
+
+| # | Claim | Reality |
+|---|-------|---------|
+| README:43 | "stdout is always JSON" | CLI has plain-text failure exits |
+| README:62 | Event names `artifact_written`, `soft_timeout` | Code emits `file_write`, `timeout_warning` |
+| README:47 | Default models listed | Code validates against different hardcoded sets |
+| output-contract.md:13 | PipelineResult has `schema_version` | It doesn't |
+| config-guide.md:248 | Skill scripts/ prepended to PATH | Only added to Codex add-dir |
+
+### Test Gaps
+
+- No tests for path traversal/escape in dispatch_id, skill name, profile name, system_prompt_file
+- No tests for inbox delimiter poisoning, control-record symlink attacks, shared-/tmp permissions
+- No tests for negative timeout, Gemini prompt write failure, "parse error but exit 0"
+- CLI test suite not hermetic: `go test ./...` fails when `~/.agent-mux/config.toml` exists (passes with `HOME=$(mktemp -d)`)
+
+---
+
+## 6. Implementation Priority
+
+### Phase 1: Foundation (unblocks everything else)
+1. Output contract fix (§1) — centralized result emitter, all paths write JSON to stdout
+2. `--yes` default for `--stdin` mode
+3. Test suite hermetic fix (`HOME` isolation)
+
+### Phase 2: Post-Dispatch Lifecycle (highest user-facing impact)
+4. `agent-mux list` command
+5. `agent-mux status <id>` command
+6. `agent-mux result <id>` command
+7. Response truncation fixes (raise default, include full_output_path)
+
+### Phase 3: Security Hardening
+8. `internal/sanitize/` package
+9. Dispatch ID validation
+10. Per-user artifact root
+11. Hook + system_prompt fixes
+12. Skill/profile basename validation
+
+### Phase 4: Contract & Correctness
+13. Pipeline output envelope unification
+14. Inbox framing fix (NDJSON)
+15. Timeout validation
+16. Non-atomic write fixes
+17. Gemini adapter fixes
+
+### Phase 5: Polish
+18. Orphan process reaper
+19. Docs drift fixes
+20. Dead parameter cleanup
+21. `agent-mux inspect` (gaal bridge)
