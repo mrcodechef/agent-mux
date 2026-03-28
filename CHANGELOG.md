@@ -32,6 +32,13 @@ All notable changes to this project will be documented in this file.
 - **`full_output_path` field** — separate field in dispatch result JSON pointing to the `full_output.md` file path when response is truncated
 - **`response_truncated` event** — structured NDJSON event emitted when response truncation occurs, with `full_output_path`
 - **Durable dispatch store** — JSONL-based dispatch index at `~/.agent-mux/store/` for lifecycle subcommand queries
+- **`config` introspection subcommand** — inspect the fully-resolved, merged configuration without running a dispatch:
+  - `agent-mux config` — full resolved config as JSON (always JSON; no `--json` flag needed); includes `_sources` array listing loaded config files
+  - `agent-mux config --sources` — emit only the `config_sources` JSON object (list of loaded files)
+  - `agent-mux config roles [--json]` — tabular role+variant listing (name, engine, model, effort, timeout); `--json` emits JSON array
+  - `agent-mux config pipelines [--json]` — tabular pipeline listing (name, step count); `--json` emits JSON array
+  - `agent-mux config models [--json]` — engine→models mapping; `--json` emits JSON object
+  - All modes respect `--config` and `--cwd` for targeted config resolution
 
 ### Changed
 - **Rewritten from TypeScript to Go** — entire runtime replaced; bun/Node.js no longer required

@@ -40,7 +40,7 @@ printf '{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/rep
   | ./agent-mux --stdin
 ```
 
-Dispatch output is always a single JSON object on stdout. Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `gc`) default to human-readable but accept `--json`. stderr carries NDJSON event stream and heartbeat lines.
+Dispatch output is always a single JSON object on stdout. Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `gc`) default to human-readable but accept `--json`. The `config` subcommand (`config`, `config roles`, `config pipelines`, `config models`) introspects the fully-resolved configuration without dispatching. stderr carries NDJSON event stream and heartbeat lines.
 
 ## Configuration
 

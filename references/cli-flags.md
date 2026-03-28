@@ -70,6 +70,58 @@ Gemini reuses `--permission-mode` for its `--approval-mode` flag.
 
 ---
 
+## Config Subcommand
+
+```
+agent-mux config [flags]
+agent-mux config roles [flags]
+agent-mux config pipelines [flags]
+agent-mux config models [flags]
+```
+
+Introspect the fully-resolved, merged configuration. No dispatch is performed.
+
+### Shared flags (all config modes)
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--config` | string | unset | Explicit config path (overrides default lookup) |
+| `--cwd` | string | unset | Working directory for project config discovery |
+
+### `config` (root)
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--sources` | bool | `false` | Emit only the `config_sources` object (loaded file list) |
+
+Always emits JSON. No `--json` flag. The output includes a top-level `_sources` array.
+
+### `config roles`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON array instead of tabular output |
+
+Default: tabular table of NAME, ENGINE, MODEL, EFFORT, TIMEOUT. Variants shown indented under their parent role.
+
+### `config pipelines`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON array instead of tabular output |
+
+Default: tabular NAME, STEPS.
+
+### `config models`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON object instead of plain text |
+
+Default: one line per engine — `<engine>: <model>, <model>, ...`.
+
+---
+
 ## DispatchSpec JSON Fields (--stdin)
 
 When using `--stdin`, pipe a JSON object with these fields.

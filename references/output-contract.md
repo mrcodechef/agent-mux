@@ -343,6 +343,80 @@ With `--dry-run`:
 {"kind":"gc_dry_run","would_remove":3,"dispatches":[{"id":"01KM...","started":"...","engine":"codex","status":"completed"}]}
 ```
 
+### config
+
+`config` always emits JSON (no `--json` flag). The top-level `_sources` array lists the config files that were merged.
+
+```json
+{
+  "defaults": {"engine":"codex","model":"","effort":"high","sandbox":"danger-full-access","permission_mode":"","response_max_chars":16000,"max_depth":2,"allow_subdispatch":true},
+  "models": {"claude":["claude-opus-4-6","claude-sonnet-4-6"],"codex":["gpt-5.4","gpt-5.4-mini"]},
+  "roles": {"lifter":{"engine":"codex","model":"gpt-5.4","effort":"high","timeout":1800,"skills":[],"variants":{"claude":{...}}}},
+  "pipelines": {"build":{"max_parallel":8,"steps":[{"name":"plan","role":"architect"},{"name":"execute","role":"lifter"},{"name":"review","role":"auditor"}]}},
+  "timeout": {"low":120,"medium":600,"high":1800,"xhigh":2700,"grace":60},
+  "liveness": {"heartbeat_interval_sec":15,"silence_warn_seconds":90,"silence_kill_seconds":180},
+  "hooks": {"deny":[],"warn":[],"event_deny_action":""},
+  "_sources": ["/Users/alice/.agent-mux/config.toml","/repo/.agent-mux/config.toml"]
+}
+```
+
+`config --sources` emits a slimmer object:
+
+```json
+{"kind":"config_sources","sources":["/Users/alice/.agent-mux/config.toml","/repo/.agent-mux/config.toml"]}
+```
+
+### config roles --json
+
+JSON array — one entry per role, then one entry per variant (variant entries have `"variant"` set):
+
+```json
+[
+  {"name":"lifter","engine":"codex","model":"gpt-5.4","effort":"high","timeout":1800},
+  {"name":"lifter","engine":"claude","model":"claude-sonnet-4-6","effort":"high","timeout":1800,"variant":"claude"},
+  {"name":"lifter","engine":"codex","model":"gpt-5.4-mini","effort":"medium","timeout":900,"variant":"mini"},
+  {"name":"scout","engine":"codex","model":"gpt-5.4-mini","effort":"low","timeout":180}
+]
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | Role name |
+| `engine` | string | Resolved engine |
+| `model` | string | Resolved model |
+| `effort` | string | Effort tier |
+| `timeout` | int | Timeout in seconds (0 = not set) |
+| `variant` | string | Variant name; omitted for base role entries |
+
+### config pipelines --json
+
+JSON array — one entry per pipeline:
+
+```json
+[
+  {"name":"build","steps":3},
+  {"name":"research","steps":3},
+  {"name":"tenx","steps":2}
+]
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | Pipeline name |
+| `steps` | int | Number of steps defined |
+
+### config models --json
+
+JSON object — engine name to model list:
+
+```json
+{
+  "claude": ["claude-opus-4-6","claude-sonnet-4-6"],
+  "codex": ["gpt-5.4","gpt-5.4-mini","gpt-5.3-codex-spark","gpt-5.2-codex"],
+  "gemini": ["gemini-3-flash-preview","gemini-3.1-pro-preview","gemini-2.5-pro","gemini-2.5-flash"]
+}
+```
+
 ### Lifecycle Errors
 
 All lifecycle errors emit:

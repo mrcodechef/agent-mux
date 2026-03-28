@@ -654,6 +654,53 @@ event_deny_action = "warn"   # "kill" (default) or "warn"
 | `agent-mux --signal <id> <message>` | signal |
 | `agent-mux --stdin [flags]` | stdin dispatch |
 | `agent-mux --version` | version |
+| `agent-mux config [sub] [flags]` | config introspection |
+
+### Config Subcommand
+
+Inspect the fully-merged, resolved configuration without running a dispatch. Useful for verifying that config layers applied correctly, checking which roles/variants exist, or debugging model-name issues.
+
+All modes respect `--config <path>` and `--cwd <dir>` for targeted config resolution.
+
+```
+agent-mux config [--config <path>] [--cwd <dir>] [--sources]
+agent-mux config roles [--config <path>] [--cwd <dir>] [--json]
+agent-mux config pipelines [--config <path>] [--cwd <dir>] [--json]
+agent-mux config models [--config <path>] [--cwd <dir>] [--json]
+```
+
+**`agent-mux config`** — prints the full resolved config as a JSON object. Always JSON (no `--json` flag needed). The root key `_sources` lists the config files that were loaded.
+
+**`agent-mux config --sources`** — prints only the `config_sources` JSON object:
+```json
+{"kind":"config_sources","sources":["/Users/alice/.agent-mux/config.toml","/repo/.agent-mux/config.toml"]}
+```
+
+**`agent-mux config roles`** — tabular listing of all roles and their variants:
+```
+NAME            ENGINE  MODEL       EFFORT  TIMEOUT
+lifter          codex   gpt-5.4     high    1800s
+  └ claude      claude  claude-...  high    1800s
+  └ mini        codex   gpt-5.4-... medium  900s
+```
+Pass `--json` for a JSON array (see output-contract.md).
+
+**`agent-mux config pipelines`** — tabular listing of pipeline names and step counts:
+```
+NAME      STEPS
+build     3
+research  3
+```
+Pass `--json` for a JSON array.
+
+**`agent-mux config models`** — engine-to-model-list mapping:
+```
+claude: claude-opus-4-6, claude-sonnet-4-6
+codex: gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark
+```
+Pass `--json` for a JSON object.
+
+Errors follow the standard lifecycle error envelope: `{"kind":"error","error":{...}}`.
 
 ### --stdin JSON
 
