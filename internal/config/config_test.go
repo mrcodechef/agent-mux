@@ -238,6 +238,69 @@ silence_warn_seconds = 45
 	}
 }
 
+func TestLoadConfigRejectsNonPositiveTimeoutValues(t *testing.T) {
+	dir := t.TempDir()
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name: "timeout low",
+			content: `
+[timeout]
+low = 0
+`,
+			want: "timeout.low",
+		},
+		{
+			name: "timeout grace",
+			content: `
+[timeout]
+grace = -1
+`,
+			want: "timeout.grace",
+		},
+		{
+			name: "role timeout",
+			content: `
+[roles.reviewer]
+timeout = 0
+`,
+			want: "roles.reviewer.timeout",
+		},
+		{
+			name: "variant timeout",
+			content: `
+[roles.reviewer.variants.fast]
+timeout = -5
+`,
+			want: "roles.reviewer.variants.fast.timeout",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-")+".toml")
+			if err := os.WriteFile(path, []byte(strings.TrimSpace(tt.content)), 0o644); err != nil {
+				t.Fatalf("WriteFile(%q): %v", path, err)
+			}
+
+			_, err := LoadConfig(path, dir)
+			if err == nil {
+				t.Fatal("LoadConfig error = nil, want validation error")
+			}
+			if !IsValidationError(err) {
+				t.Fatalf("error = %T %v, want validation error", err, err)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want field %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestPrecedenceWithLocalConfigs(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

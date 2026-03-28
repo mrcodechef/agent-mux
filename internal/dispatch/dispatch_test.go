@@ -92,9 +92,13 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	}
 
 	path := filepath.Join(dir, "_dispatch_meta.json")
+	tmpPath := path + ".tmp"
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
+	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("meta temp file stat error = %v, want not exists", err)
 	}
 
 	var meta DispatchMeta
@@ -127,11 +131,43 @@ func TestWriteAndUpdateDispatchMeta(t *testing.T) {
 	if err := json.Unmarshal(data, &meta); err != nil {
 		t.Fatalf("Unmarshal after update: %v", err)
 	}
+	if _, err := os.Stat(tmpPath); !os.IsNotExist(err) {
+		t.Fatalf("meta temp file stat error after update = %v, want not exists", err)
+	}
 	if meta.Status != "completed" {
 		t.Errorf("status = %q, want completed", meta.Status)
 	}
 	if meta.EndedAt == "" {
 		t.Error("ended_at should be set")
+	}
+}
+
+func TestUpdateDispatchMetaPropagatesWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID: "01JQXYZ",
+		Salt:       "coral-fox-nine",
+		Engine:     "codex",
+		Model:      "gpt-5.4",
+		Prompt:     "Build the parser",
+		Cwd:        "/path/to/project",
+	}
+	if err := WriteDispatchMeta(dir, spec); err != nil {
+		t.Fatalf("WriteDispatchMeta: %v", err)
+	}
+
+	if err := os.Chmod(dir, 0o555); err != nil {
+		t.Fatalf("Chmod(%q): %v", dir, err)
+	}
+	defer func() {
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatalf("restore dir mode: %v", err)
+		}
+	}()
+
+	err := UpdateDispatchMeta(dir, "failed", nil)
+	if err == nil {
+		t.Fatal("UpdateDispatchMeta error = nil, want write error")
 	}
 }
 

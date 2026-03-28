@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -52,6 +53,9 @@ func TestExecutePipeline_Sequential(t *testing.T) {
 
 	if got := len(result.Steps); got != 2 {
 		t.Fatalf("steps = %d, want 2", got)
+	}
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
 	}
 	if got := len(prompts); got != 2 {
 		t.Fatalf("prompts = %d, want 2", got)
@@ -191,6 +195,9 @@ func TestExecutePipeline_PartialFailure(t *testing.T) {
 	if result.Status != "partial" {
 		t.Fatalf("status = %q, want partial", result.Status)
 	}
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
+	}
 	if result.Steps[0].Succeeded != 2 {
 		t.Fatalf("step 0 succeeded = %d, want 2", result.Steps[0].Succeeded)
 	}
@@ -241,6 +248,9 @@ func TestExecutePipeline_AllFail(t *testing.T) {
 
 	if result.Status != "failed" {
 		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
 	}
 	if got := len(result.Steps); got != 1 {
 		t.Fatalf("steps = %d, want 1", got)
@@ -410,6 +420,47 @@ func TestArtifactDirs(t *testing.T) {
 		if !gotSet[dir] {
 			t.Fatalf("missing expected artifact dir %q in %v", dir, dirs)
 		}
+	}
+}
+
+func TestExecutePipeline_ArtifactDirFailureUsesPipelineEnvelope(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	baseSpec := testBaseSpec(tmp)
+	pipelineDir := filepath.Join(tmp, "blocked")
+	if err := os.WriteFile(pipelineDir, []byte("not a directory"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	result, err := ExecutePipeline(context.Background(), PipelineConfig{
+		Steps: []PipelineStep{
+			{Name: "review"},
+		},
+	}, baseSpec, pipelineDir, func(_ context.Context, _ *types.DispatchSpec) *types.DispatchResult {
+		t.Fatal("dispatch should not run when pipeline artifact directory setup fails")
+		return nil
+	})
+	if err == nil {
+		t.Fatal("ExecutePipeline error = nil, want setup failure")
+	}
+	if result == nil {
+		t.Fatal("result = nil, want failed pipeline envelope")
+	}
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil {
+		t.Fatal("error = nil, want pipeline setup error")
+	}
+	if result.Error.Code != "artifact_dir_unwritable" {
+		t.Fatalf("error.code = %q, want artifact_dir_unwritable", result.Error.Code)
+	}
+	if len(result.Steps) != 0 {
+		t.Fatalf("len(steps) = %d, want 0", len(result.Steps))
 	}
 }
 

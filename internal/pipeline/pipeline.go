@@ -49,14 +49,28 @@ func ExecutePipeline(
 		prompt := buildStepPrompt(baseSpec.Prompt, step, stepOutputs, i)
 		stepArtifactDir := filepath.Join(pipelineArtifactDir, fmt.Sprintf("step-%d", i))
 		if err := os.MkdirAll(stepArtifactDir, 0o755); err != nil {
-			return partialResult(pipelineID, allSteps, start, "failed"), fmt.Errorf("create step artifact dir: %w", err)
+			return NewFailedResultWithState(
+				pipelineID,
+				allSteps,
+				start,
+				"artifact_dir_unwritable",
+				fmt.Sprintf("Create pipeline step artifact dir %q: %v", stepArtifactDir, err),
+				"Choose a writable --artifact-dir path.",
+			), fmt.Errorf("create step artifact dir: %w", err)
 		}
 
 		workerSpecs := make([]*types.DispatchSpec, parallel)
 		for w := 0; w < parallel; w++ {
 			workerArtifactDir := filepath.Join(stepArtifactDir, fmt.Sprintf("worker-%d", w))
 			if err := os.MkdirAll(workerArtifactDir, 0o755); err != nil {
-				return partialResult(pipelineID, allSteps, start, "failed"), fmt.Errorf("create worker artifact dir: %w", err)
+				return NewFailedResultWithState(
+					pipelineID,
+					allSteps,
+					start,
+					"artifact_dir_unwritable",
+					fmt.Sprintf("Create pipeline worker artifact dir %q: %v", workerArtifactDir, err),
+					"Choose a writable --artifact-dir path.",
+				), fmt.Errorf("create worker artifact dir: %w", err)
 			}
 
 			spec := buildWorkerSpec(baseSpec, step, pipelineID, i, w, workerArtifactDir, prompt)
@@ -115,13 +129,7 @@ func ExecutePipeline(
 		}
 	}
 
-	return &PipelineResult{
-		PipelineID: pipelineID,
-		Status:     pipelineStatus,
-		Steps:      allSteps,
-		FinalStep:  lastStep(allSteps),
-		DurationMS: time.Since(start).Milliseconds(),
-	}, nil
+	return newPipelineResult(pipelineID, pipelineStatus, allSteps, time.Since(start).Milliseconds(), nil), nil
 }
 
 func fanOut(ctx context.Context, specs []*types.DispatchSpec, dispatch DispatchFunc, sem chan struct{}) []WorkerResult {
@@ -393,12 +401,39 @@ func lastStep(steps []StepOutput) *StepOutput {
 	return &steps[len(steps)-1]
 }
 
-func partialResult(pipelineID string, steps []StepOutput, start time.Time, status string) *PipelineResult {
-	return &PipelineResult{
-		PipelineID: pipelineID,
-		Status:     status,
-		Steps:      steps,
-		FinalStep:  lastStep(steps),
-		DurationMS: time.Since(start).Milliseconds(),
+// NewFailedResult returns the standard failed pipeline envelope for setup/validation errors.
+func NewFailedResult(code, message, suggestion string) *PipelineResult {
+	return newPipelineResult("", "failed", nil, 0, &types.DispatchError{
+		Code:       code,
+		Message:    message,
+		Suggestion: suggestion,
+	})
+}
+
+// NewFailedResultWithState returns a failed pipeline envelope while preserving any completed steps.
+func NewFailedResultWithState(pipelineID string, steps []StepOutput, start time.Time, code, message, suggestion string) *PipelineResult {
+	return newPipelineResult(pipelineID, "failed", steps, time.Since(start).Milliseconds(), &types.DispatchError{
+		Code:       code,
+		Message:    message,
+		Suggestion: suggestion,
+	})
+}
+
+func newPipelineResult(pipelineID, status string, steps []StepOutput, durationMS int64, dispatchErr *types.DispatchError) *PipelineResult {
+	if steps == nil {
+		steps = []StepOutput{}
 	}
+	return &PipelineResult{
+		SchemaVersion: pipelineResultSchemaVersion,
+		PipelineID:    pipelineID,
+		Status:        status,
+		Steps:         steps,
+		FinalStep:     lastStep(steps),
+		Error:         dispatchErr,
+		DurationMS:    durationMS,
+	}
+}
+
+func partialResult(pipelineID string, steps []StepOutput, start time.Time, status string) *PipelineResult {
+	return newPipelineResult(pipelineID, status, steps, time.Since(start).Milliseconds(), nil)
 }

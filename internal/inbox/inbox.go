@@ -1,18 +1,26 @@
 package inbox
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 const (
 	inboxFilename = "inbox.md"
 	delimiter     = "\n---\n"
 )
+
+// InboxMessage is one coordinator signal read from the inbox.
+type InboxMessage struct {
+	Message   string `json:"message"`
+	Timestamp string `json:"ts"`
+}
 
 // CreateInbox creates the inbox file at dispatch start.
 // Uses O_CREATE|O_EXCL — returns nil if file already exists (idempotent for reruns).
@@ -27,9 +35,7 @@ func CreateInbox(artifactDir string) error {
 	return f.Close()
 }
 
-// WriteInbox appends a message to the inbox file atomically using O_APPEND.
-// Each message is terminated with the delimiter "---".
-// Messages <= 4096 bytes are atomic on POSIX (PIPE_BUF guarantee).
+// WriteInbox appends one NDJSON-encoded message under an exclusive flock.
 func WriteInbox(artifactDir, message string) error {
 	f, err := os.OpenFile(inboxPath(artifactDir), os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
 	if err != nil {
@@ -41,8 +47,15 @@ func WriteInbox(artifactDir, message string) error {
 	}
 	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
 
-	payload := message + delimiter
-	if _, err := f.Write([]byte(payload)); err != nil {
+	payload, err := json.Marshal(InboxMessage{
+		Message:   message,
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal inbox message: %w", err)
+	}
+	payload = append(payload, '\n')
+	if _, err := f.Write(payload); err != nil {
 		return fmt.Errorf("append inbox message: %w", err)
 	}
 	return nil
@@ -50,8 +63,8 @@ func WriteInbox(artifactDir, message string) error {
 
 // ReadInbox reads all messages from the inbox and clears it atomically.
 // Uses flock(LOCK_EX) to ensure exclusivity with concurrent writers.
-// Returns slice of messages (split by delimiter), or nil if inbox is empty.
-func ReadInbox(artifactDir string) ([]string, error) {
+// Returns slice of messages, or nil if inbox is empty.
+func ReadInbox(artifactDir string) ([]InboxMessage, error) {
 	f, err := os.OpenFile(inboxPath(artifactDir), os.O_RDWR, 0644)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -80,14 +93,7 @@ func ReadInbox(artifactDir string) ([]string, error) {
 		return nil, nil
 	}
 
-	parts := strings.Split(string(data), delimiter)
-	messages := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part == "" {
-			continue
-		}
-		messages = append(messages, part)
-	}
+	messages := parseInboxData(data)
 	if len(messages) == 0 {
 		return nil, nil
 	}
@@ -106,4 +112,44 @@ func HasMessages(artifactDir string) bool {
 
 func inboxPath(artifactDir string) string {
 	return filepath.Join(artifactDir, inboxFilename)
+}
+
+func parseInboxData(data []byte) []InboxMessage {
+	if messages, ok := parseNDJSONLines(string(data)); ok {
+		return messages
+	}
+	return parseLegacyBlocks(string(data))
+}
+
+func parseNDJSONLines(data string) ([]InboxMessage, bool) {
+	lines := strings.Split(data, "\n")
+	messages := make([]InboxMessage, 0, len(lines))
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		var message InboxMessage
+		if err := json.Unmarshal([]byte(trimmed), &message); err != nil {
+			return nil, false
+		}
+		messages = append(messages, message)
+	}
+	return messages, true
+}
+
+func parseLegacyBlocks(data string) []InboxMessage {
+	parts := strings.Split(data, delimiter)
+	messages := make([]InboxMessage, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if ndjsonMessages, ok := parseNDJSONLines(part); ok && len(ndjsonMessages) > 0 {
+			messages = append(messages, ndjsonMessages...)
+			continue
+		}
+		messages = append(messages, InboxMessage{Message: part})
+	}
+	return messages
 }

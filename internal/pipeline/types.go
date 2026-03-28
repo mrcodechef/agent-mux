@@ -1,6 +1,12 @@
 package pipeline
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/buildoak/agent-mux/internal/types"
+)
+
+const pipelineResultSchemaVersion = 1
 
 // HandoffMode controls how step output is passed to the next step.
 type HandoffMode string
@@ -72,11 +78,13 @@ type StepOutput struct {
 
 // PipelineResult is returned by ExecutePipeline.
 type PipelineResult struct {
-	PipelineID string       `json:"pipeline_id"`
-	Status     string       `json:"status"` // "completed" | "partial" | "failed"
-	Steps      []StepOutput `json:"steps"`
-	FinalStep  *StepOutput  `json:"final_step,omitempty"`
-	DurationMS int64        `json:"duration_ms"`
+	SchemaVersion int                  `json:"schema_version"`
+	PipelineID    string               `json:"pipeline_id"`
+	Status        string               `json:"status"` // "completed" | "partial" | "failed"
+	Steps         []StepOutput         `json:"steps"`
+	FinalStep     *StepOutput          `json:"final_step,omitempty"`
+	Error         *types.DispatchError `json:"error,omitempty"`
+	DurationMS    int64                `json:"duration_ms"`
 }
 
 // ValidatePipeline checks pipeline config for correctness.

@@ -105,6 +105,52 @@ effort = "medium"
 	}
 }
 
+func TestLoadCoordinatorRejectsNonPositiveFrontmatterTimeout(t *testing.T) {
+	cwd := t.TempDir()
+	agentsDir := filepath.Join(cwd, ".claude", "agents")
+	mustMkdirAll(t, agentsDir)
+
+	writeTestFile(t, filepath.Join(agentsDir, "planner.md"), `---
+timeout: 0
+---
+planner
+`)
+
+	_, _, err := LoadCoordinator("planner", cwd)
+	if err == nil {
+		t.Fatal("LoadCoordinator error = nil, want validation error")
+	}
+	if !IsValidationError(err) {
+		t.Fatalf("error = %T %v, want validation error", err, err)
+	}
+	if !strings.Contains(err.Error(), "invalid timeout") {
+		t.Fatalf("error = %q, want invalid timeout message", err)
+	}
+}
+
+func TestLoadCoordinatorRejectsNonPositiveCompanionTimeout(t *testing.T) {
+	cwd := t.TempDir()
+	agentsDir := filepath.Join(cwd, ".claude", "agents")
+	mustMkdirAll(t, agentsDir)
+
+	writeTestFile(t, filepath.Join(agentsDir, "builder.md"), "Build things.\n")
+	writeTestFile(t, filepath.Join(agentsDir, "builder.toml"), `
+[timeout]
+grace = 0
+`)
+
+	_, _, err := LoadCoordinator("builder", cwd)
+	if err == nil {
+		t.Fatal("LoadCoordinator error = nil, want validation error")
+	}
+	if !IsValidationError(err) {
+		t.Fatalf("error = %T %v, want validation error", err, err)
+	}
+	if !strings.Contains(err.Error(), "timeout.grace") {
+		t.Fatalf("error = %q, want timeout.grace message", err)
+	}
+}
+
 func TestLoadCoordinatorReturnsSeparateSourcesForPrecedence(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")

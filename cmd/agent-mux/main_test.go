@@ -17,6 +17,7 @@ import (
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/recovery"
+	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -142,6 +143,165 @@ func TestSignalRejectsInvalidDispatchID(t *testing.T) {
 	}
 	if ack.Error == nil || ack.Error.Code != "invalid_input" {
 		t.Fatalf("error = %#v, want invalid_input", ack.Error)
+	}
+}
+
+func TestListCommandOutputsFilteredTable(t *testing.T) {
+	isolateHome(t)
+
+	first := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
+	second := testStoreRecord("01KMT4E7CDDD1KQEC8MYJRW9Z9", "failed")
+	third := testStoreRecord("01KMT4E7DFFF1KQEC8MYJRW2A2", "completed")
+	third.Salt = "fair-ant-nine"
+
+	writeStoreRecord(t, first, "first result", true)
+	writeStoreRecord(t, second, "", true)
+	writeStoreRecord(t, third, "third result", true)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"list", "--status", "completed", "--limit", "1"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "ID") || !strings.Contains(out, "STATUS") || !strings.Contains(out, "CWD") {
+		t.Fatalf("stdout = %q, want table header", out)
+	}
+	if !strings.Contains(out, third.ID[:12]) {
+		t.Fatalf("stdout = %q, want latest completed dispatch %q", out, third.ID[:12])
+	}
+	if strings.Contains(out, first.ID[:12]) {
+		t.Fatalf("stdout = %q, want first completed dispatch filtered out by --limit 1", out)
+	}
+	if strings.Contains(out, second.ID[:12]) {
+		t.Fatalf("stdout = %q, want failed dispatch filtered out", out)
+	}
+}
+
+func TestListCommandJSONOutputsNDJSON(t *testing.T) {
+	isolateHome(t)
+
+	first := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
+	second := testStoreRecord("01KMT4E7CDDD1KQEC8MYJRW9Z9", "failed")
+
+	writeStoreRecord(t, first, "first result", true)
+	writeStoreRecord(t, second, "", true)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"list", "--json", "--limit", "2"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("ndjson lines = %d, want 2; stdout=%q", len(lines), stdout.String())
+	}
+
+	for _, line := range lines {
+		var record store.DispatchRecord
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("unmarshal NDJSON line %q: %v", line, err)
+		}
+		if record.ID == "" {
+			t.Fatalf("record = %#v, want id", record)
+		}
+	}
+}
+
+func TestStatusCommandOutputsRecordSummary(t *testing.T) {
+	isolateHome(t)
+
+	record := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
+	writeStoreRecord(t, record, "stored response", true)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"status", record.ID[:12]}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	out := stdout.String()
+	for _, want := range []string{
+		"Status:",
+		record.Status,
+		"Engine/Model:",
+		record.Engine + " / " + record.Model,
+		"Duration:",
+		"824s",
+		"Started:",
+		record.StartedAt,
+		"Truncated:",
+		"true",
+		"Salt:",
+		record.Salt,
+		"ArtifactDir:",
+		record.ArtifactDir,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stdout = %q, want substring %q", out, want)
+		}
+	}
+}
+
+func TestResultCommandReadsStoredResultByPrefix(t *testing.T) {
+	isolateHome(t)
+
+	record := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
+	response := "# Result\n\nStored response text."
+	writeStoreRecord(t, record, response, true)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"result", record.ID[:12]}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stdout.String() != response {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), response)
+	}
+}
+
+func TestResultCommandFallsBackToLegacyFullOutput(t *testing.T) {
+	isolateHome(t)
+
+	record := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
+	writeStoreRecord(t, record, "", false)
+
+	artifactDir, err := recovery.DefaultArtifactDir(record.ID)
+	if err != nil {
+		t.Fatalf("DefaultArtifactDir: %v", err)
+	}
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", artifactDir, err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(artifactDir) })
+
+	response := "# Result\n\nRecovered from legacy full_output."
+	if err := os.WriteFile(filepath.Join(artifactDir, "full_output.md"), []byte(response), 0o644); err != nil {
+		t.Fatalf("WriteFile(full_output.md): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"result", "--json", record.ID[:12]}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["dispatch_id"] != record.ID {
+		t.Fatalf("dispatch_id = %#v, want %q", raw["dispatch_id"], record.ID)
+	}
+	if raw["response"] != response {
+		t.Fatalf("response = %#v, want %q", raw["response"], response)
 	}
 }
 
@@ -1105,8 +1265,8 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	}
 }
 
-func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndZero(t *testing.T) {
-	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"pipeline_step":0,"grace_sec":0,"response_max_chars":0}`))
+func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndAllowedZero(t *testing.T) {
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"pipeline_step":0,"response_max_chars":0}`))
 	if err != nil {
 		t.Fatalf("decodeStdinDispatchSpec: %v", err)
 	}
@@ -1120,11 +1280,31 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndZero(t *testing.T) {
 	if spec.PipelineStep != 0 {
 		t.Fatalf("pipeline_step = %d, want 0", spec.PipelineStep)
 	}
-	if spec.GraceSec != 0 {
-		t.Fatalf("grace_sec = %d, want 0", spec.GraceSec)
+	if spec.GraceSec != 60 {
+		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
 	}
 	if spec.ResponseMaxChars != 0 {
 		t.Fatalf("response_max_chars = %d, want 0", spec.ResponseMaxChars)
+	}
+}
+
+func TestDecodeStdinDispatchSpecRejectsNonPositiveTimeout(t *testing.T) {
+	_, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","timeout_sec":0}`))
+	if err == nil {
+		t.Fatal("decodeStdinDispatchSpec error = nil, want invalid timeout_sec")
+	}
+	if !strings.Contains(err.Error(), `invalid timeout_sec "0"`) {
+		t.Fatalf("error = %q, want invalid timeout_sec message", err)
+	}
+}
+
+func TestDecodeStdinDispatchSpecRejectsNonPositiveGrace(t *testing.T) {
+	_, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","grace_sec":0}`))
+	if err == nil {
+		t.Fatal("decodeStdinDispatchSpec error = nil, want invalid grace_sec")
+	}
+	if !strings.Contains(err.Error(), `invalid grace_sec "0"`) {
+		t.Fatalf("error = %q, want invalid grace_sec message", err)
 	}
 }
 
@@ -1214,6 +1394,80 @@ func TestRunPreviewRejectsInvalidCoordinatorName(t *testing.T) {
 	}
 }
 
+func TestRunPreviewRejectsNonPositiveTimeoutFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"preview", "--engine", "codex", "--timeout", "0", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
+	}
+}
+
+func TestRunStdinRejectsNonPositiveGrace(t *testing.T) {
+	input := []byte(`{"engine":"codex","prompt":"from stdin","grace_sec":0}`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"--stdin"}, bytes.NewReader(input), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
+	}
+}
+
+func TestRunPreviewRejectsConfigWithNonPositiveGrace(t *testing.T) {
+	configDir := t.TempDir()
+	configPath := filepath.Join(configDir, "config.toml")
+	if err := os.WriteFile(configPath, []byte("[timeout]\ngrace = 0\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"preview", "--config", configPath, "--engine", "codex", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
+	}
+}
+
+func TestRunPreviewRejectsProfileWithNonPositiveTimeout(t *testing.T) {
+	cwd := t.TempDir()
+	agentsDir := filepath.Join(cwd, ".claude", "agents")
+	if err := os.MkdirAll(agentsDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", agentsDir, err)
+	}
+	if err := os.WriteFile(filepath.Join(agentsDir, "planner.md"), []byte("---\ntimeout: 0\n---\nplanner\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(planner.md): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{"preview", "--cwd", cwd, "--profile", "planner", "--engine", "codex", "hello"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "invalid_input" {
+		t.Fatalf("error = %#v, want invalid_input", result.Error)
+	}
+}
+
 func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	isolateHome(t)
 
@@ -1283,7 +1537,7 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadInbox: %v", err)
 	}
-	if len(messages) != 1 || messages[0] != "focus on auth" {
+	if len(messages) != 1 || messages[0].Message != "focus on auth" {
 		t.Fatalf("messages = %v, want [focus on auth]", messages)
 	}
 
@@ -1347,6 +1601,9 @@ name = "review"
 	}
 
 	result := decodePipelineResult(t, stdout.Bytes())
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
+	}
 	if result.PipelineID == "" {
 		t.Fatal("pipeline_id should be set")
 	}
@@ -1396,11 +1653,95 @@ variant = "spark"
 	}
 
 	result := decodePipelineResult(t, stdout.Bytes())
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
+	}
 	if len(result.Steps) != 1 || len(result.Steps[0].Workers) != 1 {
 		t.Fatalf("pipeline result = %#v, want one worker", result)
 	}
 	if result.Steps[0].Workers[0].ErrorCode != "engine_not_found" {
 		t.Fatalf("workers[0].error_code = %q, want engine_not_found from variant engine", result.Steps[0].Workers[0].ErrorCode)
+	}
+}
+
+func TestPipelineValidationErrorUsesPipelineEnvelope(t *testing.T) {
+	isolateHome(t)
+
+	cfgPath := writeTempConfig(t, `
+[pipelines.review]
+[[pipelines.review.steps]]
+name = "plan"
+pass_output_as = "shared"
+
+[[pipelines.review.steps]]
+name = "execute"
+pass_output_as = "shared"
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--config", cfgPath,
+		"--engine", "codex",
+		"--pipeline", "review",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodePipelineResult(t, stdout.Bytes())
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "config_error" {
+		t.Fatalf("error = %#v, want config_error", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, "validation failed") {
+		t.Fatalf("error.message = %q, want validation failure", result.Error.Message)
+	}
+}
+
+func TestPipelineSetupErrorUsesPipelineEnvelope(t *testing.T) {
+	isolateHome(t)
+
+	cfgPath := writeTempConfig(t, `
+[pipelines.review]
+[[pipelines.review.steps]]
+name = "review"
+role = "missing-role"
+`)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	exitCode := run([]string{
+		"--config", cfgPath,
+		"--engine", "codex",
+		"--pipeline", "review",
+		"implement feature",
+	}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+
+	result := decodePipelineResult(t, stdout.Bytes())
+	if result.SchemaVersion != 1 {
+		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+	if result.Error == nil || result.Error.Code != "config_error" {
+		t.Fatalf("error = %#v, want config_error", result.Error)
+	}
+	if !strings.Contains(result.Error.Message, `resolve pipeline step[0] role "missing-role"`) {
+		t.Fatalf("error.message = %q, want setup failure", result.Error.Message)
+	}
+	if len(result.Steps) != 0 {
+		t.Fatalf("len(steps) = %d, want 0", len(result.Steps))
 	}
 }
 
@@ -1674,6 +2015,39 @@ func writeTestSkillFile(t *testing.T, cwd, name, content string) {
 	}
 }
 
+func writeStoreRecord(t *testing.T, record store.DispatchRecord, response string, writeResult bool) {
+	t.Helper()
+
+	if err := store.AppendRecord("", record); err != nil {
+		t.Fatalf("AppendRecord: %v", err)
+	}
+	if writeResult {
+		if err := store.WriteResult("", record.ID, response); err != nil {
+			t.Fatalf("WriteResult: %v", err)
+		}
+	}
+}
+
+func testStoreRecord(id, status string) store.DispatchRecord {
+	return store.DispatchRecord{
+		ID:            id,
+		Salt:          "quick-newt-zero",
+		TraceToken:    "AGENT_MUX_GO_" + id,
+		Status:        status,
+		Engine:        "codex",
+		Model:         "gpt-5.4",
+		Role:          "explorer",
+		Variant:       "default",
+		StartedAt:     "2026-03-28T13:45:00Z",
+		EndedAt:       "2026-03-28T13:58:44Z",
+		DurationMs:    824000,
+		Cwd:           "/Users/otonashi/thinking/building/agent-mux",
+		Truncated:     true,
+		ResponseChars: 3817,
+		ArtifactDir:   filepath.Join("/tmp/agent-mux", id),
+	}
+}
+
 func decodeResult(t *testing.T, data []byte) types.DispatchResult {
 	t.Helper()
 
@@ -1754,9 +2128,11 @@ func stringSliceFromJSONValue(t *testing.T, value any) []string {
 }
 
 type pipelineResultForTest struct {
-	PipelineID string `json:"pipeline_id"`
-	Status     string `json:"status"`
-	Steps      []struct {
+	SchemaVersion int                  `json:"schema_version"`
+	PipelineID    string               `json:"pipeline_id"`
+	Status        string               `json:"status"`
+	Error         *types.DispatchError `json:"error,omitempty"`
+	Steps         []struct {
 		Workers []struct {
 			ErrorCode string `json:"error_code"`
 		} `json:"workers"`

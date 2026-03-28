@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"unicode/utf8"
@@ -41,6 +42,9 @@ type cliCommand string
 const (
 	commandDispatch cliCommand = "dispatch"
 	commandPreview  cliCommand = "preview"
+	commandList     cliCommand = "list"
+	commandStatus   cliCommand = "status"
+	commandResult   cliCommand = "result"
 )
 
 type stringSlice []string
@@ -140,6 +144,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writer, isTerminal terminalChecker) int {
 	command, args, explicitCommand := splitCommand(args)
+	switch command {
+	case commandList:
+		return runListCommand(args, stdout)
+	case commandStatus:
+		return runStatusCommand(args, stdout)
+	case commandResult:
+		return runResultCommand(args, stdout)
+	}
+
 	var flagOutput bytes.Buffer
 	fs, parsed := newFlagSet(&flagOutput)
 	err := fs.Parse(normalizeArgs(args))
@@ -213,7 +226,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	} else {
 		normalizeDispatchFlags(&flags)
-		if err := validateDispatchFlags(flags); err != nil {
+		if err := validateDispatchFlags(flags, flagsSet); err != nil {
 			return emitFailureResult(stdout, &types.DispatchSpec{}, 1, "invalid_input", err.Error(), "")
 		}
 		spec, err = buildDispatchSpecE(flags, positional)
@@ -228,7 +241,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
 	if err != nil {
-		return emitFailureResult(stdout, spec, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
+		return emitFailureResult(stdout, spec, 1, configFailureCode(err), fmt.Sprintf("load config: %v", err), "")
 	}
 
 	applyPreset := func(engine, model, effort string) {
@@ -258,7 +271,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if profileName != "" {
 		coordSpec, companionCfg, err := config.LoadProfile(profileName, spec.Cwd)
 		if err != nil {
-			return failResult(spec, "config_error", err.Error(), "")
+			return failResult(spec, configFailureCode(err), err.Error(), "")
 		}
 		if companionCfg != nil {
 			config.MergeConfigInto(cfg, companionCfg)
@@ -354,6 +367,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 	if spec.GraceSec == 0 {
 		spec.GraceSec = cfg.Timeout.Grace
+	}
+	if err := validateResolvedDispatchTimeouts(spec); err != nil {
+		return failResult(spec, "invalid_input", err.Error(), "")
 	}
 
 	if spec.EngineOpts == nil {
@@ -700,7 +716,12 @@ func normalizeDispatchFlags(flags *cliFlags) {
 	}
 }
 
-func validateDispatchFlags(flags cliFlags) error {
+func validateDispatchFlags(flags cliFlags, flagsSet map[string]bool) error {
+	if flagsSet["timeout"] || flagsSet["t"] {
+		if err := validatePositiveDispatchValue("timeout", flags.timeout); err != nil {
+			return err
+		}
+	}
 	for _, name := range flags.skills {
 		if err := sanitize.ValidateBasename(name); err != nil {
 			return newInputValidationError("skill", name, err)
@@ -754,6 +775,33 @@ func newInputValidationError(field, value string, err error) error {
 func isInputValidationError(err error) bool {
 	var target *inputValidationError
 	return errors.As(err, &target)
+}
+
+func validatePositiveDispatchValue(field string, value int) error {
+	if value > 0 {
+		return nil
+	}
+	return newInputValidationError(field, strconv.Itoa(value), errors.New("must be > 0"))
+}
+
+func validateResolvedDispatchTimeouts(spec *types.DispatchSpec) error {
+	if spec == nil {
+		return errors.New("missing DispatchSpec")
+	}
+	if err := validatePositiveDispatchValue("timeout_sec", spec.TimeoutSec); err != nil {
+		return err
+	}
+	if err := validatePositiveDispatchValue("grace_sec", spec.GraceSec); err != nil {
+		return err
+	}
+	return nil
+}
+
+func configFailureCode(err error) string {
+	if config.IsValidationError(err) {
+		return "invalid_input"
+	}
+	return "config_error"
 }
 
 func decodeStdinDispatchSpec(stdin io.Reader) (*types.DispatchSpec, error) {
@@ -843,8 +891,17 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 	if !jsonFieldSet(fields, "pipeline_step") {
 		spec.PipelineStep = -1
 	}
+	if jsonFieldSet(fields, "timeout_sec") {
+		if err := validatePositiveDispatchValue("timeout_sec", spec.TimeoutSec); err != nil {
+			return err
+		}
+	}
 	if !jsonFieldSet(fields, "grace_sec") {
 		spec.GraceSec = 60
+	} else {
+		if err := validatePositiveDispatchValue("grace_sec", spec.GraceSec); err != nil {
+			return err
+		}
 	}
 	if !jsonFieldSet(fields, "response_max_chars") {
 		spec.ResponseMaxChars = unsetResponseMaxChars
@@ -900,6 +957,12 @@ func splitCommand(args []string) (cliCommand, []string, bool) {
 		return commandPreview, args[1:], true
 	case string(commandDispatch):
 		return commandDispatch, args[1:], true
+	case string(commandList):
+		return commandList, args[1:], true
+	case string(commandStatus):
+		return commandStatus, args[1:], true
+	case string(commandResult):
+		return commandResult, args[1:], true
 	default:
 		return commandDispatch, args, false
 	}
@@ -1266,6 +1329,8 @@ func flagTakesValue(name string) bool {
 		"--reasoning", "-r",
 		"--max-turns",
 		"--add-dir",
+		"--limit",
+		"--status",
 		"--output", "-o":
 		return true
 	default:

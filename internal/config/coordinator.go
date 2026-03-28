@@ -116,6 +116,11 @@ func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 	if err := yaml.Unmarshal(frontmatter, &extra); err != nil {
 		return nil, fmt.Errorf("decode frontmatter extra fields: %w", err)
 	}
+	if _, ok := extra["timeout"]; ok {
+		if err := validatePositiveInt("timeout", path, parsed.Timeout); err != nil {
+			return nil, err
+		}
+	}
 	delete(extra, "model")
 	delete(extra, "effort")
 	delete(extra, "engine")
@@ -153,6 +158,9 @@ func loadCoordinatorCompanionConfig(path string) (*Config, error) {
 	for name, role := range cfg.Roles {
 		role.SourceDir = filepath.Dir(path)
 		cfg.Roles[name] = role
+	}
+	if err := validateExplicitTimeoutValues(path, &cfg); err != nil {
+		return nil, err
 	}
 	return &cfg, nil
 }

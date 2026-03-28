@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -74,6 +75,27 @@ type HooksConfig struct {
 	EventDenyAction string   `toml:"event_deny_action"`
 }
 
+type ValidationError struct {
+	Field  string
+	Source string
+	Value  int
+}
+
+func (e *ValidationError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Source != "" {
+		return fmt.Sprintf("invalid %s in %q: must be > 0 (got %d)", e.Field, e.Source, e.Value)
+	}
+	return fmt.Sprintf("invalid %s: must be > 0 (got %d)", e.Field, e.Value)
+}
+
+func IsValidationError(err error) bool {
+	var target *ValidationError
+	return errors.As(err, &target)
+}
+
 func DefaultConfig() *Config {
 	return &Config{
 		Defaults: DefaultsConfig{
@@ -134,6 +156,9 @@ func LoadConfig(configPath string, cwd string) (*Config, error) {
 		for name, role := range overlay.Roles {
 			role.SourceDir = filepath.Dir(path)
 			overlay.Roles[name] = role
+		}
+		if err := validateExplicitTimeoutValues(path, &overlay); err != nil {
+			return nil, err
 		}
 		mergeConfig(cfg, &overlay)
 	}
@@ -402,4 +427,58 @@ func mergeRoleVariant(baseVariant, overlayVariant RoleVariant, overlay *Config, 
 	}
 
 	return merged
+}
+
+func validateExplicitTimeoutValues(source string, cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+
+	for _, field := range []struct {
+		name    string
+		value   int
+		defined bool
+	}{
+		{name: "timeout.low", value: cfg.Timeout.Low, defined: cfg.defined("timeout", "low")},
+		{name: "timeout.medium", value: cfg.Timeout.Medium, defined: cfg.defined("timeout", "medium")},
+		{name: "timeout.high", value: cfg.Timeout.High, defined: cfg.defined("timeout", "high")},
+		{name: "timeout.xhigh", value: cfg.Timeout.XHigh, defined: cfg.defined("timeout", "xhigh")},
+		{name: "timeout.grace", value: cfg.Timeout.Grace, defined: cfg.defined("timeout", "grace")},
+	} {
+		if !field.defined {
+			continue
+		}
+		if err := validatePositiveInt(field.name, source, field.value); err != nil {
+			return err
+		}
+	}
+
+	for roleName, role := range cfg.Roles {
+		if cfg.defined("roles", roleName, "timeout") {
+			if err := validatePositiveInt("roles."+roleName+".timeout", source, role.Timeout); err != nil {
+				return err
+			}
+		}
+		for variantName, variant := range role.Variants {
+			if cfg.defined("roles", roleName, "variants", variantName, "timeout") {
+				field := "roles." + roleName + ".variants." + variantName + ".timeout"
+				if err := validatePositiveInt(field, source, variant.Timeout); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+func validatePositiveInt(field, source string, value int) error {
+	if value > 0 {
+		return nil
+	}
+	return &ValidationError{
+		Field:  field,
+		Source: source,
+		Value:  value,
+	}
 }

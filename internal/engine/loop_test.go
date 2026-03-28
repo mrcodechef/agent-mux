@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/buildoak/agent-mux/internal/inbox"
+	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -268,6 +269,93 @@ func TestLoopEngineEmitsResponseTruncatedEvent(t *testing.T) {
 	endIdx := strings.Index(eventsText, `"type":"dispatch_end"`)
 	if truncatedIdx < 0 || endIdx < 0 || truncatedIdx > endIdx {
 		t.Fatalf("event order = %q, want response_truncated before dispatch_end", eventsText)
+	}
+}
+
+func TestLoopEnginePersistsCompletedDispatchToStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	artifactDir := t.TempDir()
+	response := strings.Repeat("x", 64)
+	adapter := newScriptedAdapter(strings.Join([]string{
+		fmt.Sprintf("echo %q", "RESPONSE:"+response),
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+
+	spec := testDispatchSpec(artifactDir)
+	spec.ResponseMaxChars = 16
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed", result.Status)
+	}
+
+	record, err := store.FindRecord("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("FindRecord: %v", err)
+	}
+	if record == nil {
+		t.Fatal("FindRecord = nil, want record")
+	}
+	if record.Status != "completed" {
+		t.Fatalf("status = %q, want completed", record.Status)
+	}
+	if !record.Truncated {
+		t.Fatal("truncated = false, want true")
+	}
+	if record.ResponseChars != len(response) {
+		t.Fatalf("response_chars = %d, want %d", record.ResponseChars, len(response))
+	}
+	if record.StartedAt == "" || record.EndedAt == "" {
+		t.Fatalf("timestamps = %#v, want started_at and ended_at", record)
+	}
+
+	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if storedResponse != response {
+		t.Fatalf("stored response = %q, want %q", storedResponse, response)
+	}
+}
+
+func TestLoopEnginePersistsFailedDispatchToStore(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	adapter := newScriptedAdapter("exit 0")
+	adapter.baseBinary = "nonexistent-binary-that-does-not-exist"
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	spec := testDispatchSpec(t.TempDir())
+	result, err := engine.Dispatch(context.Background(), spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusFailed {
+		t.Fatalf("status = %q, want failed", result.Status)
+	}
+
+	record, err := store.FindRecord("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("FindRecord: %v", err)
+	}
+	if record == nil {
+		t.Fatal("FindRecord = nil, want record")
+	}
+	if record.Status != "failed" {
+		t.Fatalf("status = %q, want failed", record.Status)
+	}
+
+	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	if err != nil {
+		t.Fatalf("ReadResult: %v", err)
+	}
+	if storedResponse != "" {
+		t.Fatalf("stored response = %q, want empty string", storedResponse)
 	}
 }
 

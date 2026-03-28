@@ -123,6 +123,20 @@ func UpdateDispatchMeta(artifactDir string, status string, artifacts []string) e
 
 	return writeMetaFile(path, &meta)
 }
+
+func ReadDispatchMeta(artifactDir string) (*DispatchMeta, error) {
+	data, err := os.ReadFile(filepath.Join(artifactDir, "_dispatch_meta.json"))
+	if err != nil {
+		return nil, fmt.Errorf("read meta: %w", err)
+	}
+
+	var meta DispatchMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("unmarshal meta: %w", err)
+	}
+	return &meta, nil
+}
+
 func TruncateResponse(response string, maxChars int) (string, bool) {
 	if maxChars <= 0 || len(response) <= maxChars {
 		return response, false
@@ -362,7 +376,15 @@ func writeMetaFile(path string, meta *DispatchMeta) error {
 	if err != nil {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
-	return os.WriteFile(path, data, 0644)
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return fmt.Errorf("write meta temp file: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("rename meta temp file: %w", err)
+	}
+	return nil
 }
 
 func truncateAtBoundary(s string, maxChars int) string {

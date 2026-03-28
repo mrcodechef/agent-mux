@@ -12,11 +12,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
+	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/supervisor"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -74,7 +76,7 @@ func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifact
 				continue
 			}
 			for _, msg := range messages {
-				signals <- loopSignal{kind: loopSignalInbox, runGen: runGen, message: msg}
+				signals <- loopSignal{kind: loopSignalInbox, runGen: runGen, message: msg.Message}
 			}
 		}
 	}
@@ -346,8 +348,8 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			return
 		}
 		for _, msg := range messages {
-			_ = emitter.Emit(event.Event{Type: "coordinator_inject", Message: msg})
-			pendingMessages = append(pendingMessages, msg)
+			_ = emitter.Emit(event.Event{Type: "coordinator_inject", Message: msg.Message})
+			pendingMessages = append(pendingMessages, msg.Message)
 		}
 	}
 
@@ -659,35 +661,167 @@ func buildFailureResult(spec *types.DispatchSpec, metadata *types.DispatchMetada
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("failed", durationMS)
 	}
-	return dispatch.BuildFailedResult(spec, dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
+	result := dispatch.BuildFailedResult(spec, dispatch.NewDispatchError(code, message, suggestion), emptyActivity(), metadata, durationMS)
+	persistDispatchRecord(spec, result, "")
+	return result
 }
 
 func emptyActivity() *types.DispatchActivity {
 	return &types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}}
 }
 
+func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, attemptedState string, err error, priorErr *types.DispatchError) *types.DispatchResult {
+	message := fmt.Sprintf("Persist %s dispatch metadata in %q: %v", attemptedState, spec.ArtifactDir, err)
+	if priorErr != nil && strings.TrimSpace(priorErr.Message) != "" {
+		message += fmt.Sprintf(" Original dispatch error: %s", priorErr.Message)
+	}
+	dispatchErr := dispatch.NewDispatchError("artifact_dir_unwritable", message, "Ensure the artifact directory is writable.")
+	dispatchErr.PartialArtifacts = dispatch.ScanArtifacts(spec.ArtifactDir)
+	return dispatch.BuildFailedResult(spec, dispatchErr, activity, metadata, durationMS)
+}
+
 func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS, spec.ResponseMaxChars)
+	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
+		if emitter != nil {
+			_ = emitter.EmitDispatchEnd("failed", durationMS)
+		}
+		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "completed", err, nil)
+		persistDispatchRecord(spec, failureResult, response)
+		return failureResult
+	}
+	persistDispatchRecord(spec, result, response)
 	if emitter != nil && result.ResponseTruncated && result.FullOutputPath != nil {
 		_ = emitter.EmitResponseTruncated(*result.FullOutputPath)
 	}
-	_ = dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts)
-	_ = emitter.EmitDispatchEnd("completed", durationMS)
+	if emitter != nil {
+		_ = emitter.EmitDispatchEnd("completed", durationMS)
+	}
 	return result
 }
 
 func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	_ = emitter.EmitDispatchEnd("timed_out", durationMS)
-	_ = dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", dispatch.ScanArtifacts(spec.ArtifactDir))
-	return dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
+	result := dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
+	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", result.Artifacts); err != nil {
+		if emitter != nil {
+			_ = emitter.EmitDispatchEnd("failed", durationMS)
+		}
+		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "timed_out", err, nil)
+		persistDispatchRecord(spec, failureResult, response)
+		return failureResult
+	}
+	persistDispatchRecord(spec, result, response)
+	if emitter != nil {
+		_ = emitter.EmitDispatchEnd("timed_out", durationMS)
+	}
+	return result
 }
 
 func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
-	_ = emitter.EmitDispatchEnd("failed", durationMS)
-	artifacts := dispatch.ScanArtifacts(spec.ArtifactDir)
-	_ = dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", artifacts)
-	dispErr.PartialArtifacts = artifacts
-	return dispatch.BuildFailedResult(spec, dispErr, activity, metadata, durationMS)
+	result := dispatch.BuildFailedResult(spec, dispErr, activity, metadata, durationMS)
+	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", result.Artifacts); err != nil {
+		if emitter != nil {
+			_ = emitter.EmitDispatchEnd("failed", durationMS)
+		}
+		failureResult := buildTerminalMetaWriteFailureResult(spec, activity, metadata, durationMS, "failed", err, dispErr)
+		persistDispatchRecord(spec, failureResult, "")
+		return failureResult
+	}
+	dispErr.PartialArtifacts = result.Artifacts
+	persistDispatchRecord(spec, result, "")
+	if emitter != nil {
+		_ = emitter.EmitDispatchEnd("failed", durationMS)
+	}
+	return result
+}
+
+func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResult, responseText string) {
+	if spec == nil || result == nil {
+		return
+	}
+
+	startedAt, endedAt := dispatchWindow(spec.ArtifactDir, result.DurationMS)
+	record := store.DispatchRecord{
+		ID:            firstNonEmpty(result.DispatchID, spec.DispatchID),
+		Salt:          firstNonEmpty(result.DispatchSalt, spec.Salt),
+		TraceToken:    firstNonEmpty(result.TraceToken, spec.TraceToken),
+		Status:        string(result.Status),
+		Engine:        firstNonEmpty(metadataEngine(result), spec.Engine),
+		Model:         firstNonEmpty(metadataModel(result), spec.Model),
+		Role:          firstNonEmpty(metadataRole(result), spec.Role),
+		Variant:       spec.Variant,
+		StartedAt:     startedAt,
+		EndedAt:       endedAt,
+		DurationMs:    result.DurationMS,
+		Cwd:           spec.Cwd,
+		Truncated:     result.ResponseTruncated,
+		ResponseChars: utf8.RuneCountInString(responseText),
+		ArtifactDir:   spec.ArtifactDir,
+	}
+
+	_ = store.AppendRecord("", record)
+	_ = store.WriteResult("", record.ID, responseText)
+}
+
+func dispatchWindow(artifactDir string, durationMS int64) (string, string) {
+	meta, err := dispatch.ReadDispatchMeta(artifactDir)
+	if err == nil && meta != nil {
+		startedAt := strings.TrimSpace(meta.StartedAt)
+		endedAt := strings.TrimSpace(meta.EndedAt)
+		if startedAt != "" || endedAt != "" {
+			if startedAt == "" && endedAt != "" {
+				startedAt = backfillStartedAt(endedAt, durationMS)
+			}
+			if endedAt == "" && startedAt != "" {
+				if started, parseErr := time.Parse(time.RFC3339, startedAt); parseErr == nil {
+					endedAt = started.Add(time.Duration(durationMS) * time.Millisecond).Format(time.RFC3339)
+				}
+			}
+			return startedAt, endedAt
+		}
+	}
+
+	ended := time.Now().UTC()
+	return ended.Add(-time.Duration(durationMS) * time.Millisecond).Format(time.RFC3339), ended.Format(time.RFC3339)
+}
+
+func backfillStartedAt(endedAt string, durationMS int64) string {
+	ended, err := time.Parse(time.RFC3339, endedAt)
+	if err != nil {
+		return ""
+	}
+	return ended.Add(-time.Duration(durationMS) * time.Millisecond).Format(time.RFC3339)
+}
+
+func metadataEngine(result *types.DispatchResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	return result.Metadata.Engine
+}
+
+func metadataModel(result *types.DispatchResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	return result.Metadata.Model
+}
+
+func metadataRole(result *types.DispatchResult) string {
+	if result == nil || result.Metadata == nil {
+		return ""
+	}
+	return result.Metadata.Role
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func failureFromEventOrProcess(errEvt *types.HarnessEvent, exitCode int, stderr string, includeExitPrefix bool) *types.DispatchError {
