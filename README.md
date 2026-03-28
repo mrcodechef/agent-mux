@@ -42,6 +42,28 @@ printf '{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/rep
 
 Output is always a single JSON object on stdout. stderr carries NDJSON event stream and heartbeat lines.
 
+## Configuration
+
+Roles, models, pipelines, and timeouts live in `.agent-mux/config.toml` alongside a `prompts/` directory for system prompt files.
+
+**Resolution order** (later wins): `~/.agent-mux/config.toml` (global) → `<cwd>/.agent-mux/config.toml` (project) → `--config` (explicit). Project config merges on top of global with **defined-wins** semantics — set fields override, absent fields inherit.
+
+**Minimal role definition:**
+
+```toml
+[roles.scout]
+engine = "codex"
+model = "gpt-5.4-mini"
+effort = "low"
+timeout = 180
+system_prompt_file = "prompts/scout.md"
+```
+
+Dispatch: `{"role":"scout","prompt":"Find all TODO comments","cwd":"/repo"}`
+
+> **[Setup Guide](references/config-setup-guide.md)** — first-time walkthrough, roles, variants, pipelines.
+> **[TOML Reference](references/config-guide.md)** — full schema, every field, merge semantics.
+
 ## Engines
 
 | Engine | Binary | Best For | Default Model |
@@ -91,7 +113,7 @@ API key is set. agent-mux will attempt dispatch if any auth path is available �
 | [DOCS.md](DOCS.md) | Full technical reference — architecture, config schema, dispatch lifecycle |
 | [SKILL.md](SKILL.md) | Operational manual for AI agents using agent-mux |
 | [FEATURES.md](FEATURES.md) | Open feature requests and known limitations |
-| [references/](references/) | Engine comparison, prompting guide, output contract schema, installation guide |
+| [references/](references/) | Engine comparison, prompting guide, output contract, config guides, installation |
 
 ## License
 

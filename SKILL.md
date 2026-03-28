@@ -7,11 +7,12 @@ description: |
   pipeline, recover or signal a live dispatch, parse schema_version:1
   JSON output contracts, configure roles/variants/pipelines in TOML,
   inject skills or coordinator personas, or coordinate multi-model tasks.
-  Covers: JSON-first --stdin invocation, role-based routing from TOML
-  config, variant selection, pipeline orchestration with fan-out and
-  handoff modes, recovery continuation, mid-flight signaling, hooks,
-  event streaming, output contract parsing (dispatch + pipeline + signal),
-  timeout alignment, liveness supervision, and context-loading tools.
+  Covers: role-based CLI dispatch (-R flag), JSON --stdin for complex
+  dispatches, preview preflight verification, variant selection, pipeline
+  orchestration with fan-out and handoff modes, recovery continuation,
+  mid-flight signaling, hooks, event streaming, output contract parsing
+  (dispatch + pipeline + signal), timeout alignment, liveness supervision,
+  and context-loading tools.
   Keywords: subagent, dispatch, worker, codex, claude, gemini, pipeline,
   role, variant, recover, signal, agent-mux, spawn agent, engine, multi-model,
   TOML config, fan-out, handoff, orchestration, coordinate workers.
@@ -66,48 +67,74 @@ If it can be config, it stays config. Code is the last resort.
 
 ---
 
-## Canonical Invocation — JSON-first via --stdin
+## Invocation Hierarchy
 
-Every dispatch MUST use `--stdin` with a JSON payload. This is the only
-sanctioned invocation pattern.
+### Primary: Role-based CLI
+
+For simple, single-role dispatches — the common case:
 
 ```bash
-printf '{"role":"lifter","prompt":"Implement retries in src/http/client.ts","cwd":"/repo"}' | agent-mux --stdin
+agent-mux -R=lifter -C=/repo "Implement retries in src/http/client.ts"
 ```
 
-Why JSON-first:
-- Every parameter is explicit and visible
-- Auditable — the agent shows the JSON before executing
-- No flag-ordering bugs or shell escaping issues
-- Composable — roles resolve engine/model/effort/timeout from config.toml
+Why primary: roles encapsulate engine/model/effort/timeout/skills — one flag
+replaces six. Readable in logs, scripts, and agent output.
 
-CLI flags exist for interactive/debug use but agents MUST use `--stdin` JSON.
+### Complex dispatches: JSON via --stdin
+
+When you need multiple overrides, pipeline params, recovery context, or
+programmatic construction:
+
+```bash
+printf '{"role":"lifter","variant":"claude","skills":["react"],"context_file":"design.md","prompt":"...","cwd":"/repo"}' | agent-mux --stdin
+```
+
+Why JSON: when the dispatch has enough parameters that CLI flags become
+unreadable, or when constructing the dispatch programmatically.
+
+### Escape hatch: raw flags
+
+When no role fits:
+
+```bash
+agent-mux -E=codex -m=gpt-5.4 -e=high -C=/repo "one-off task"
+```
 
 ---
 
-## Two-Step Verification Protocol
+## Verification via Preview
 
-Agents MUST NOT fire-and-forget dispatches. Follow this gate:
+Agents MUST NOT fire-and-forget non-trivial dispatches. The `preview`
+subcommand is the native verification gate.
 
-**Step 1 — Construct.** Build the JSON dispatch payload.
+**Step 1 — Construct.** Build the dispatch command (CLI or JSON).
 
-**Step 2 — Present.** Show the payload to the user (or log it) for review.
-
-```
-I'll dispatch this to agent-mux:
-{"role":"lifter","prompt":"...","cwd":"/repo"}
-
-Shall I proceed?
-```
-
-**Step 3 — Execute.** Only after approval:
+**Step 2 — Preview.** Use `agent-mux preview` to see the resolved plan:
 
 ```bash
-printf '<the-approved-json>' | agent-mux --stdin
+agent-mux preview -R=lifter -C=/repo "Implement retries"
 ```
 
-This is a verification gate, not a suggestion. The agent must show what it
-will dispatch before dispatching it.
+This outputs the full resolved DispatchSpec (engine, model, effort, timeout,
+system prompt, skills) as JSON WITHOUT executing. The agent reviews the plan.
+
+For JSON dispatches:
+
+```bash
+printf '{"role":"lifter","prompt":"...","cwd":"/repo"}' | agent-mux preview --stdin
+```
+
+**Step 3 — Execute.** After confirming the plan looks right, run without
+`preview`:
+
+```bash
+agent-mux -R=lifter -C=/repo "Implement retries"
+```
+
+The key insight: `preview` is a native verification gate built into the
+binary. Agents SHOULD use it for non-trivial dispatches — unfamiliar roles,
+complex overrides, pipeline construction. For routine role-based dispatches
+with well-known roles, showing the command inline is sufficient.
 
 ---
 
@@ -322,9 +349,9 @@ For the complete field reference including pipeline-internal fields, see
 ## Anti-Patterns
 
 - **Do not parse output as text.** Always parse JSON from stdout.
-- **Do not use bare CLI flags.** Use `--stdin` JSON for programmatic dispatch.
-- **Do not assemble raw engine/model/effort combos.** Use roles.
-- **Do not fire-and-forget.** Show the dispatch JSON before executing.
+- **Do not assemble raw engine/model/effort combos when a role fits.** Use roles.
+- **Do not fire-and-forget non-trivial dispatches.** Use `preview` first.
+- **Do not skip `preview` for unfamiliar roles or complex overrides.**
 - **Do not use `--permission-mode` with Codex.** Use `--sandbox` instead.
 - **Do not send exploration prompts to Codex.** Use Claude for open-ended work.
 - **Do not make wrapper timeout equal to worker timeout.** Add 60s slack.
@@ -335,6 +362,30 @@ For the complete field reference including pipeline-internal fields, see
   `PipelineResult`, not `DispatchResult`.
 - **Do not use `xhigh` effort for routine tasks.** `high` is the workhorse.
 - **Do not inline giant context blobs.** Use `--context-file` or `--skill`.
+
+---
+
+## Quick Reference
+
+```bash
+# Scout: quick scan
+agent-mux -R=scout -C=/repo "Find all TODO markers"
+
+# Lifter: implementation
+agent-mux -R=lifter -C=/repo "Implement the auth middleware"
+
+# Researcher: deep analysis
+agent-mux -R=researcher -C=/repo "Analyze the performance bottleneck in src/api/"
+
+# Variant: swap engine within role
+agent-mux -R=lifter --variant=claude -C=/repo "Refactor with architecture awareness"
+
+# Preview before execute
+agent-mux preview -R=lifter -C=/repo "Complex task"
+
+# Complex dispatch via JSON
+printf '{"role":"lifter","pipeline":"build","prompt":"...","cwd":"/repo"}' | agent-mux --stdin
+```
 
 ---
 
