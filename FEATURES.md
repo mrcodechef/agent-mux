@@ -44,6 +44,20 @@ Open feature requests and follow-up ideas for agent-mux.
   - Why: not needed now, but potentially useful for Jenkins/operator workflows
     and better caller-death tolerance.
 
+- Response truncation: make configurable, not silent
+  - Current state: `response_max_chars` defaults to 2000. When exceeded,
+    response is silently truncated and `full_output.md` is written to the
+    artifact directory. The caller gets `response_truncated: true` but
+    must know to check the artifact path for the full text.
+  - Impact: auditor dispatches, research tasks, and any verbose worker
+    output gets silently cut. Callers that don't check `response_truncated`
+    lose data without warning.
+  - Proposed: (a) raise default to 8000-16000 chars (LLM context windows are
+    large enough), (b) emit a structured warning event when truncation occurs,
+    (c) add a `--no-truncate` flag or `response_max_chars: 0` to disable,
+    (d) include the `full_output` artifact path in the result JSON when
+    truncation occurs so callers don't have to construct it.
+
 - Hooks: context-aware matching
   - Current state: event-level deny/warn patterns use case-insensitive
     substring matching on ALL event content, including files read during
