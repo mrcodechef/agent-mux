@@ -1,344 +1,346 @@
 ---
 name: agent-mux
 description: |
-  Unified subagent dispatch layer for Codex, Claude Code, and OpenCode engines.
-  Spawn workers, run parallel execution pipelines, and get one strict JSON output contract.
-  Use this skill when you need to: dispatch a subagent, spawn an agent worker,
-  run multi-model pipelines, invoke codex/claude/opencode engines, or coordinate
-  parallel execution across AI coding engines. Covers unified output parsing,
-  timeout/heartbeat behavior, skill injection, and MCP cluster configuration.
-  Keywords: subagent, dispatch, worker, codex, claude, opencode, parallel execution,
-  multi-model, spawn agent, engine, unified output.
+  Dispatch layer that bridges AI coding harnesses — Codex, Claude, and
+  Gemini — through one JSON contract and one CLI. Use this skill when you
+  need to: spawn a worker agent across any engine, run a TOML-defined
+  pipeline, recover or signal a live dispatch, parse schema_version:1
+  JSON output contracts, configure roles/variants/pipelines in TOML,
+  inject skills or coordinator personas, or coordinate multi-model tasks.
+  Covers: JSON-first --stdin invocation, role-based routing from TOML
+  config, variant selection, pipeline orchestration with fan-out and
+  handoff modes, recovery continuation, mid-flight signaling, hooks,
+  event streaming, output contract parsing (dispatch + pipeline + signal),
+  timeout alignment, liveness supervision, and context-loading tools.
+  Keywords: subagent, dispatch, worker, codex, claude, gemini, pipeline,
+  role, variant, recover, signal, agent-mux, spawn agent, engine, multi-model,
+  TOML config, fan-out, handoff, orchestration, coordinate workers.
 ---
 
 # agent-mux
 
-One CLI for Codex, Claude, and OpenCode with one strict JSON contract.
+The dispatch substrate that lets any LLM coordinate any other LLM. One CLI,
+one JSON contract, three engines (Codex, Claude, Gemini). TOML-driven roles,
+variants, and pipelines turn good dispatch practices into reusable config.
+The calling LLM decides what to do — agent-mux handles the how.
+
+## Why agent-mux Exists
+
+Three problems motivated building this:
+
+1. **Claude Code cannot natively use Codex as a subagent.** agent-mux bridges
+   that gap — Claude architects a plan, dispatches implementation to Codex,
+   and verifies the result, all through one CLI.
+
+2. **Codex has no subagent system at all.** agent-mux gives it orchestration
+   primitives — pipelines, fan-out, recovery — without baking orchestration
+   logic into Codex itself.
+
+3. **The 10x pattern needs a coordinator.** The highest-leverage workflow is
+   Claude architects, Codex executes, Claude verifies. agent-mux makes that
+   loop a single pipeline invocation instead of manual session juggling.
+
+These three problems collapse into one design:
+
+**Tool, not orchestrator.** agent-mux is a dispatch layer where the LLM makes
+all decisions. Roles and pipelines are presets that condense good practices
+into config — the LLM decides when and how to use them. No orchestration
+logic is baked into the binary.
+
+**Job done is holy.** Never discard completed work. Timeout kills the process,
+not the artifacts. Every dispatch has an artifact path. Workers write
+incrementally. Recovery is first-class.
+
+**Errors are steering signals.** Every error is crafted for the calling LLM to
+self-correct — what failed, why, what to try next. Not generic status codes.
+
+**Single-shot with curated context.** One well-prompted dispatch with narrow
+context beats a swarm of under-specified workers. Orchestration is explicit
+escalation, not baseline.
+
+**Config over code.** Roles, pipelines, models, timeouts — all in TOML. The
+Go binary is generic; the config makes it specific.
+
+**Simplest viable dispatch.** If it can be a CLI call, it stays a CLI call.
+If it can be config, it stays config. Code is the last resort.
+
+---
+
+## Canonical Invocation — JSON-first via --stdin
+
+Every dispatch MUST use `--stdin` with a JSON payload. This is the only
+sanctioned invocation pattern.
 
 ```bash
-agent-mux --engine <codex|claude|opencode> [options] "prompt"
+printf '{"role":"lifter","prompt":"Implement retries in src/http/client.ts","cwd":"/repo"}' | agent-mux --stdin
 ```
 
-> If `agent-mux` is not linked globally, run `bun run src/agent.ts ...` from this repo.
+Why JSON-first:
+- Every parameter is explicit and visible
+- Auditable — the agent shows the JSON before executing
+- No flag-ordering bugs or shell escaping issues
+- Composable — roles resolve engine/model/effort/timeout from config.toml
+
+CLI flags exist for interactive/debug use but agents MUST use `--stdin` JSON.
 
 ---
 
-## Setup
+## Two-Step Verification Protocol
+
+Agents MUST NOT fire-and-forget dispatches. Follow this gate:
+
+**Step 1 — Construct.** Build the JSON dispatch payload.
+
+**Step 2 — Present.** Show the payload to the user (or log it) for review.
+
+```
+I'll dispatch this to agent-mux:
+{"role":"lifter","prompt":"...","cwd":"/repo"}
+
+Shall I proceed?
+```
+
+**Step 3 — Execute.** Only after approval:
 
 ```bash
-git clone https://github.com/buildoak/agent-mux.git /path/to/agent-mux
-cd /path/to/agent-mux && ./setup.sh && bun link
+printf '<the-approved-json>' | agent-mux --stdin
 ```
 
-- **Claude Code:** copy this repo into `.claude/skills/agent-mux/`
-- **Codex CLI:** append this SKILL.md content to your project's root `AGENTS.md`
-
-For the full installation walkthrough (prerequisites, verification, troubleshooting), see [references/installation-guide.md](references/installation-guide.md).
+This is a verification gate, not a suggestion. The agent must show what it
+will dispatch before dispatching it.
 
 ---
 
-## Quick Reference
+## Role-Based Dispatch (Preferred)
+
+Roles are the primary dispatch mechanism. A role resolves engine, model,
+effort, timeout, skills, and system prompt from config.toml.
+
+```json
+{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/repo"}
+```
+
+### Live Role Catalog (from coordinator config.toml)
+
+| Role | Engine | Model | Effort | Timeout | Purpose |
+|------|--------|-------|--------|---------|---------|
+| `scout` | codex | gpt-5.4-mini | low | 180s | Quick scans, file discovery |
+| `explorer` | codex | gpt-5.4 | high | 600s | Deep read, multi-file analysis |
+| `researcher` | claude | claude-opus-4-6 | high | 900s | Web search, synthesis, analysis |
+| `architect` | claude | claude-opus-4-6 | high | 900s | Design, planning, architecture |
+| `lifter` | codex | gpt-5.4 | high | 1800s | Implementation, code changes |
+| `lifter-deep` | codex | gpt-5.4 | xhigh | 2400s | Complex implementation, deep work |
+| `grunt` | codex | gpt-5.4-mini | medium | 600s | Cheap parallel workers |
+| `batch` | codex | gpt-5.4-mini | high | 900s | High-volume batch processing |
+| `auditor` | codex | gpt-5.4 | xhigh | 2700s | Verification, code audit |
+| `writer` | codex | gpt-5.4 | high | 1500s | Blog posts, documentation |
+| `handoff-extractor` | codex | gpt-5.4-mini | high | 120s | Session handoff extraction |
+
+### Variants — Engine Swaps Within a Role
+
+Variants let you keep the same role semantics but swap the engine:
+
+```json
+{"role":"lifter","variant":"claude","prompt":"...","cwd":"/repo"}
+```
+
+Common variants across roles: `claude`, `gemini`, `mini`, `spark`.
+See [references/config-guide.md](references/config-guide.md) for the full
+variant table.
+
+### Raw Override (Escape Hatch)
+
+When no role fits, specify engine/model/effort directly:
+
+```json
+{"engine":"codex","model":"gpt-5.4","effort":"high","prompt":"...","cwd":"/repo"}
+```
+
+This is the escape hatch, not the default path.
+
+---
+
+## Core Dispatch Modes
+
+### 1. Single Dispatch
+
+```json
+{"role":"lifter","prompt":"Build the auth middleware","cwd":"/repo"}
+```
+
+### 2. Pipeline
+
+```json
+{"pipeline":"build","prompt":"Redesign the auth flow","cwd":"/repo","engine":"codex"}
+```
+
+Pipeline mode returns a different JSON shape. See
+[references/output-contract.md](references/output-contract.md).
+
+### 3. Recovery
+
+Continue a timed-out or interrupted dispatch:
+
+```json
+{"engine":"codex","continues_dispatch_id":"01KM...","prompt":"Finish the remaining tests","cwd":"/repo"}
+```
+
+### 4. Signal
+
+Send a steering message to a running dispatch:
 
 ```bash
-# Codex: implementation, debugging, concrete code changes
-agent-mux --engine codex --cwd /repo --reasoning high --effort high "Implement retries in src/http/client.ts"
-
-# Codex Mini: cost-efficient, high-volume subagent tasks
-agent-mux --engine codex --model gpt-5.4-mini --cwd /repo --reasoning high "Review and fix error handling in src/api/"
-
-# Codex Spark: fast grunt work and broad scan/edit tasks
-agent-mux --engine codex --model gpt-5.3-codex-spark --cwd /repo --reasoning high "Add doc comments across src/"
-
-# Claude: architecture, reasoning, synthesis
-agent-mux --engine claude --cwd /repo --effort high --permission-mode bypassPermissions "Design rollout plan for auth refactor"
-
-# OpenCode: third opinion, model diversity, cost-flexible checks
-agent-mux --engine opencode --cwd /repo --model kimi "Review this patch and challenge assumptions"
-
-# Skill injection (repeatable)
-agent-mux --engine codex --cwd /repo --skill react --skill test-writer "Implement + test dark mode"
-
-# MCP clusters
-agent-mux --engine claude --cwd /repo --mcp-cluster knowledge "Find canonical docs for token rotation"
-
-# --browser sugar for browser cluster
-agent-mux --engine codex --cwd /repo --browser "Open app, inspect controls, summarize findings"
-
-# Full access mode
-agent-mux --engine codex --cwd /repo --full "Install deps and implement requested fix"
-
-# System prompt from file
-agent-mux --engine claude --cwd /repo --system-prompt-file prompts/reviewer.md "Review this patch"
-
-# Coordinator persona
-agent-mux --engine codex --cwd /repo --coordinator reviewer "Audit this change for regressions"
-
-# Combine coordinator + extra skill + inline system prompt
-agent-mux --engine claude --cwd /repo --coordinator reviewer --skill perf-auditor --system-prompt "Prioritize latency risks." "Evaluate this service update"
+agent-mux --signal=01KM... "Focus on auth paths; skip tests"
 ```
 
----
-
-## Engine Selection Protocol
-
-Use this decision tree:
-
-1. Code execution, file edits, implementation -> **Codex** with `--reasoning high`.
-2. Cost-efficient subagent tasks, high-volume parallel work -> **Codex Mini** with `--model gpt-5.4-mini` (2x+ faster than 5.4, 272K context).
-3. Fast grunt work, filesystem scanning, parallel worker throughput -> **Codex Spark** with `--model gpt-5.3-codex-spark`.
-4. Architecture, deep reasoning, multi-file analysis, synthesis, writing -> **Claude**.
-5. Model diversity, third-opinion checks, cost-flexible runs -> **OpenCode**.
-
-_Note: Pratchett-OS coordinator uses Codex + Claude only._
-
-> For engine-specific prompting tips, model variants, and comparison tables, see [references/prompting-guide.md](references/prompting-guide.md).
+Signal returns a compact JSON ack. Actual injection happens at an event
+boundary when the harness has a resumable session/thread ID.
 
 ---
 
-## CLI Flags
+## Output Contract Summary
 
-Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
+All output goes to `stdout` as JSON (`schema_version: 1`).
 
-### Common (all engines)
+### Dispatch Result
 
-| Flag | Short | Type | Values | Default | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `--engine` | `-E` | string | `codex`, `claude`, `opencode` | required | Engine selector |
-| `--cwd` | `-C` | string | path | current directory | Working directory |
-| `--model` | `-m` | string | model id | engine default | Model override |
-| `--effort` | `-e` | string | `low`, `medium`, `high`, `xhigh` | `medium` | Effort level |
-| `--timeout` | `-t` | string | positive integer (ms) | effort-mapped | Hard timeout override |
-| `--system-prompt` | `-s` | string | text | unset | Appended system context |
-| `--system-prompt-file` | -- | string | path to file | unset | Loads file as system prompt, joined with other prompts |
-| `--coordinator` | -- | string | coordinator name | unset | Loads spec from `<cwd>/.claude/agents/<name>.md` |
-| `--skill` | -- | string[] | repeatable names | `[]` | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
-| `--mcp-cluster` | -- | string[] | repeatable names | `[]` | Enables MCP cluster(s) |
-| `--browser` | `-b` | boolean | true/false | `false` | Adds `browser` cluster |
-| `--full` | `-f` | boolean | true/false | `false` | Full access mode |
-| `--version` | `-V` | boolean | true/false | `false` | Print version |
-| `--help` | `-h` | boolean | true/false | `false` | Print help |
-
-### Codex-specific
-
-| Flag | Short | Type | Values | Default | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `--sandbox` | -- | string | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
-| `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort (maps to Codex config key `model_reasoning_effort`) |
-| `--network` | `-n` | boolean | true/false | `true` | Enabled by default; `--full` also forces `true` |
-| `--codex-path` | -- | string | path to Codex binary | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
-| `--add-dir` | `-d` | string[] | repeatable paths | `[]` | Additional writable dirs |
-
-### Claude-specific
-
-| Flag | Short | Type | Values | Default | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `--permission-mode` | `-p` | string | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | `--full` also resolves to `bypassPermissions` |
-| `--max-turns` | -- | string | positive integer | effort-derived if unset | Parsed to number when valid |
-| `--max-budget` | -- | string | positive number (USD) | unset | Parsed to `maxBudgetUsd` |
-| `--allowed-tools` | -- | string | comma-separated tool list | unset | Split into string array |
-
-### OpenCode-specific
-
-| Flag | Short | Type | Values | Default | Notes |
-| --- | --- | --- | --- | --- | --- |
-| `--variant` | -- | string | preset/model string | unset | Used if `--model` absent |
-| `--agent` | -- | string | agent name | unset | OpenCode agent selection |
-
-### Canonical enum values (from `src/types.ts`)
-
-- Engine names: `codex`, `claude`, `opencode`
-- Effort levels: `low`, `medium`, `high`, `xhigh`
-
-> For timeout/effort mapping, sandbox modes, and permission details, see [references/engine-comparison.md](references/engine-comparison.md).
-
----
-
-## Output Contract
-
-All engines emit one JSON payload to `stdout`. Parse JSON, never text.
-
-Success shape: `{ success: true, engine, response, timed_out, completed, duration_ms, activity, metadata }`
-Error shape: `{ success: false, engine, error, code, duration_ms, activity }`
-
-Error codes: `INVALID_ARGS`, `MISSING_API_KEY`, `SDK_ERROR`.
-
-Heartbeat: every 15s on `stderr` (`[heartbeat] 45s -- processing`). `stdout` is reserved for final JSON.
-
-> For full JSON schema, field descriptions, and examples, see [references/output-contract.md](references/output-contract.md).
-
----
-
-## Skills
-
-Use `--skill <name>` (repeatable). Resolves from `<cwd>/.claude/skills/<name>/SKILL.md`.
-
-- Skill content prepended as `<skill>` XML blocks
-- If `<skillDir>/scripts` exists, prepended to `PATH`
-- For Codex, skill directories auto-appended to sandbox `addDirs`
-- Path traversal names are rejected
-
----
-
-## Coordinator Mode
-
-Use `--coordinator <name>` to load a coordinator spec from `<cwd>/.claude/agents/<name>.md`.
-
-Coordinator file format: Markdown with optional YAML frontmatter.
-
-- Frontmatter `skills` (array): auto-injected as repeated `--skill`
-- Frontmatter `model` (string): default model unless CLI `--model` is set
-- Frontmatter `allowedTools` (string or array): Claude-only, merged with CLI `--allowed-tools`
-- Markdown body after frontmatter: coordinator system prompt content
-
-Example coordinator file (`<cwd>/.claude/agents/reviewer.md`):
-
-```md
----
-skills:
-  - code-review
-  - test-writer
-model: claude-sonnet-4-20250514
-allowedTools:
-  - Bash
-  - Read
-  - Write
----
-You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
+```json
+{
+  "schema_version": 1,
+  "status": "completed",
+  "dispatch_id": "01KM...",
+  "dispatch_salt": "mint-ant-five",
+  "response": "...",
+  "response_truncated": false,
+  "full_output": null,
+  "handoff_summary": "...",
+  "artifacts": [],
+  "activity": {"files_changed":[],"files_read":[],"commands_run":[],"tool_calls":[]},
+  "metadata": {"engine":"codex","model":"gpt-5.4","tokens":{"input":0,"output":0},"turns":0,"cost_usd":0},
+  "duration_ms": 12345
+}
 ```
 
-Example invocations:
+**Status values:** `completed`, `timed_out`, `failed`
 
-```bash
-# Load coordinator persona
-agent-mux --engine claude --cwd /repo --coordinator reviewer "Review recent changes"
+Callers MUST check `status` before treating output as final. A `timed_out`
+result may still have useful `response` and `artifacts`.
 
-# Coordinator + file prompt + inline prompt (all three compose in order)
-agent-mux --engine codex --cwd /repo --coordinator reviewer --system-prompt-file prompts/repo.md --system-prompt "Prioritize auth paths" "Audit this module"
+### Pipeline Result
+
+```json
+{
+  "pipeline_id": "01KM...",
+  "status": "completed",
+  "steps": [...],
+  "final_step": {...},
+  "duration_ms": 12345
+}
 ```
 
-Prompt composition order:
+**Pipeline status:** `completed`, `partial`, `failed`
 
-1. Coordinator body (`--coordinator`)
-2. File content (`--system-prompt-file`)
-3. Inline text (`--system-prompt`)
-
-Flag interactions:
-
-- `--model` on CLI overrides frontmatter `model`
-- Frontmatter `skills` merge with explicit `--skill` flags (coordinator skills first)
-- For Claude, frontmatter `allowedTools` merge with `--allowed-tools`
-
-Validation and errors:
-
-- Coordinator path traversal is rejected
-- Missing coordinator file returns `INVALID_ARGS`
-- Malformed frontmatter returns `INVALID_ARGS`
-- `--system-prompt-file` resolves relative to `--cwd`
-- Missing prompt file or directory path returns `INVALID_ARGS`
-
-### GSD Coordinator Reference
-
-agent-mux ships with a reference GSD (Get Shit Done) coordinator spec at [references/get-shit-done-agent.md](references/get-shit-done-agent.md).
-
-This is a multi-step task coordinator that orchestrates Codex and Claude workers for complex pipelines. It includes:
-- Model selection heuristics (when to use Codex vs Claude vs Spark)
-- Orchestration patterns (10x Pattern, Fan-Out, Research + Synthesize)
-- Output contracts and context discipline rules
-- Anti-patterns to avoid
-
-To use the GSD coordinator:
-
-```bash
-# Copy to your project
-cp references/get-shit-done-agent.md <project>/.claude/agents/get-shit-done-agent.md
-
-# Invoke via agent-mux
-agent-mux --engine claude --cwd <project> --coordinator get-shit-done-agent "Complex multi-step task"
-
-# Or from Claude Code via Task subagent
-Task(subagent_type="gsd-coordinator")
-```
-
-Customize the frontmatter `skills` list and output paths for your project. The spec is a template designed to be adapted.
+For full schemas with all fields, see
+[references/output-contract.md](references/output-contract.md).
 
 ---
 
-## MCP Clusters
+## Engine Selection
 
-Config search: `./mcp-clusters.yaml` then `~/.config/agent-mux/mcp-clusters.yaml`.
+| Use case | Role | Engine |
+|----------|------|--------|
+| Implementation, code edits, debugging | `lifter` | codex |
+| Cheap high-volume parallel work | `grunt` | codex (mini) |
+| Fast scans, light edits | `grunt` variant `spark` | codex (spark) |
+| Architecture, synthesis, planning | `architect` | claude |
+| Deep analysis, web research | `researcher` | claude |
+| Second opinion, contrast check | any role + `gemini` variant | gemini |
+| Code audit, verification | `auditor` | codex |
 
-`--mcp-cluster` is repeatable. `all` merges all clusters. `--browser` is sugar for `--mcp-cluster browser`.
-
-Bundled server: `src/mcp-servers/agent-browser.mjs` (browser automation).
-
-See `mcp-clusters.example.yaml` for config format.
-
----
-
-## Bundled Resources Index
-
-| Path | What | When to load |
-| --- | --- | --- |
-| `references/output-contract.md` | Full output schema, examples, field descriptions | Parsing agent output, debugging response shape |
-| `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison | Crafting prompts for specific engines |
-| `references/engine-comparison.md` | Detailed engine table, timeouts, sandbox/permission modes | Choosing engine config, debugging options |
-| `references/get-shit-done-agent.md` | GSD coordinator spec (reference template) | Setting up multi-step task coordination |
-| `references/installation-guide.md` | Full installation walkthrough | First-time setup, prerequisites, troubleshooting |
-| `src/agent.ts` | CLI entrypoint and adapter dispatch | Trace invocation path |
-| `src/core.ts` | parseCliArgs, timeout, heartbeat, output assembly | Always for behavior truth |
-| `src/types.ts` | Canonical engine/effort/output types | Always for contract truth |
-| `src/mcp-clusters.ts` | MCP config discovery and merge logic | MCP cluster setup/debug |
-| `src/engines/codex.ts` | Codex adapter | Codex option/event behavior |
-| `src/engines/claude.ts` | Claude adapter | Claude permissions/turn behavior |
-| `src/engines/opencode.ts` | OpenCode adapter + model presets | OpenCode model routing |
-| `src/mcp-servers/agent-browser.mjs` | Bundled browser MCP wrapper | Browser automation integration |
-| `setup.sh` | Bootstrap script | First install or environment repair |
-| `mcp-clusters.example.yaml` | Starter MCP config | Creating cluster config |
-| `CHANGELOG.md` | Release history | Verify version-specific behavior |
-| `tests/` | Test suite | Validate changes/regressions |
+For engine-specific prompting tips and model details, see
+[references/engine-comparison.md](references/engine-comparison.md) and
+[references/prompting-guide.md](references/prompting-guide.md).
 
 ---
 
 ## Timeout Alignment
 
-When calling agent-mux from a wrapper (Claude Code `Task`, Bash `timeout`, shell scripts), the wrapper's timeout **must exceed** agent-mux's internal timeout by at least 60 seconds. Otherwise the wrapper kills the process before agent-mux's graceful timeout path fires, losing activity logs and the `timed_out: true` JSON response.
+When wrapping agent-mux in another process (Claude Code Task, shell timeout),
+the wrapper MUST exceed agent-mux timeout by at least 60 seconds.
 
-| Effort | agent-mux timeout | Wrapper minimum timeout |
-|--------|-------------------|------------------------|
-| `low` | 2 min (120s) | 3 min (180s / 180000ms) |
-| `medium` | 10 min (600s) | 11 min (660s / 660000ms) |
-| `high` | 30 min (1800s) | 31 min (1860s / 1860000ms) |
-| `xhigh` | 45 min (2700s) | 46 min (2760s / 2760000ms) |
+```
+wrapper_timeout = agent_mux_timeout + 60_000ms
+```
 
-**Rule:** `wrapper_timeout = agent_mux_timeout + 60_000ms`
+| Effort | agent-mux timeout | Wrapper minimum |
+|--------|-------------------|-----------------|
+| `low` | 120s | 180s |
+| `medium` | 600s | 660s |
+| `high` | 1800s | 1860s |
+| `xhigh` | 2700s | 2760s |
 
-## Completed Field
+Roles set their own timeouts. Check the role catalog above or
+[references/config-guide.md](references/config-guide.md).
 
-The `completed` boolean on success output is the single source of truth for whether work finished:
-- `completed: true` — work ran to completion (normal exit)
-- `completed: false` — work was interrupted (timeout or shutdown)
+---
 
-Callers MUST check `completed` (or at minimum `timed_out`) before treating output as final. Checking only `success` will treat timeouts as completions.
+## DispatchSpec Fields (--stdin JSON)
+
+Essential fields for JSON dispatch:
+
+| Field | Type | Required | Notes |
+|-------|------|----------|-------|
+| `prompt` | string | yes | The task prompt |
+| `cwd` | string | yes | Working directory |
+| `role` | string | preferred | Resolves engine/model/effort/timeout from config |
+| `variant` | string | no | Engine swap within a role |
+| `engine` | string | role or this | `codex`, `claude`, `gemini` |
+| `model` | string | no | Override role's model |
+| `effort` | string | no | `low`, `medium`, `high`, `xhigh` |
+| `system_prompt` | string | no | Appended system context |
+| `skills` | string[] | no | Skill names to inject |
+| `pipeline` | string | no | Named pipeline from config |
+| `context_file` | string | no | Path to large context file |
+| `timeout_sec` | int | no | Override timeout in seconds |
+| `continues_dispatch_id` | string | no | Recovery: prior dispatch ID |
+| `profile` | string | no | Coordinator persona name |
+| `response_max_chars` | int | no | Truncate response (default 4000) |
+| `full_access` | bool | no | Default true |
+| `allow_subdispatch` | bool | no | Default true |
+| `max_depth` | int | no | Recursive depth limit (default 2) |
+
+For the complete field reference including pipeline-internal fields, see
+[references/cli-flags.md](references/cli-flags.md).
 
 ---
 
 ## Anti-Patterns
 
-- Do not parse agent-mux output as text. Always parse JSON from stdout.
-- Do not run parallel browser workers. One browser session at a time.
-- Do not read agent output files with full Read; use `tail -n 20` via Bash.
-- Do not use `--reasoning minimal` with MCP tools (Codex rejects them).
-- Do not send exploration tasks to Codex; use Claude for open-ended work.
-- Do not use `xhigh` effort for routine tasks; `high` is the workhorse.
+- **Do not parse output as text.** Always parse JSON from stdout.
+- **Do not use bare CLI flags.** Use `--stdin` JSON for programmatic dispatch.
+- **Do not assemble raw engine/model/effort combos.** Use roles.
+- **Do not fire-and-forget.** Show the dispatch JSON before executing.
+- **Do not use `--permission-mode` with Codex.** Use `--sandbox` instead.
+- **Do not send exploration prompts to Codex.** Use Claude for open-ended work.
+- **Do not make wrapper timeout equal to worker timeout.** Add 60s slack.
+- **Do not treat `--signal` ack as proof of delivery.** It confirms inbox
+  write only.
+- **Do not ignore `status` field.** A `timed_out` result is not `completed`.
+- **Do not assume pipeline output has dispatch fields.** Pipeline returns
+  `PipelineResult`, not `DispatchResult`.
+- **Do not use `xhigh` effort for routine tasks.** `high` is the workhorse.
+- **Do not inline giant context blobs.** Use `--context-file` or `--skill`.
 
 ---
 
-## Staying Updated
+## Bundled References
 
-This skill ships with an `UPDATES.md` changelog and `UPDATE-GUIDE.md` for your AI agent.
-
-After installing, tell your agent: "Check `UPDATES.md` in the agent-mux skill for any new features or changes."
-
-When updating, tell your agent: "Read `UPDATE-GUIDE.md` and apply the latest changes from `UPDATES.md`."
-
-Follow `UPDATE-GUIDE.md` so customized local files are diffed before any overwrite.
+| Path | Read when |
+|------|-----------|
+| [references/cli-flags.md](references/cli-flags.md) | You need the complete flag table or DispatchSpec field reference |
+| [references/config-guide.md](references/config-guide.md) | You need TOML config structure, role/variant definitions, config resolution order |
+| [references/output-contract.md](references/output-contract.md) | You need exact JSON schemas for dispatch, pipeline, signal, events, error codes |
+| [references/engine-comparison.md](references/engine-comparison.md) | You need engine-specific behavior, harness details, permission/sandbox mapping |
+| [references/prompting-guide.md](references/prompting-guide.md) | You are crafting prompts, writing pipeline steps, phrasing recovery/signals |
+| [references/pipeline-guide.md](references/pipeline-guide.md) | You need pipeline TOML structure, fan-out, handoff modes, step chaining |
+| [references/recovery-signal.md](references/recovery-signal.md) | You need recovery continuation, signal delivery, artifact directory layout |
