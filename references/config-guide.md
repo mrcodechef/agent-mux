@@ -247,10 +247,40 @@ All three compose in order and are concatenated into the final system prompt.
 
 ## Skill Injection
 
-Skills are loaded from `<cwd>/.claude/skills/<name>/SKILL.md`.
+### Resolution Order
 
-Behavior:
+Skills are resolved by searching for `<name>/SKILL.md` in this order:
+
+1. `<cwd>/.claude/skills/<name>/SKILL.md`
+2. `<configDir>/.claude/skills/<name>/SKILL.md` (configDir = directory of the config file that defined the active role)
+3. Each path in `[skills] search_paths`: `<search_path>/<name>/SKILL.md`
+
+First match wins. Tilde expansion (`~`) is supported in search_paths.
+
+### Search Paths Config
+
+```toml
+[skills]
+search_paths = [
+  "~/.claude/skills",
+  "~/thinking/pratchett-os/coordinator/.claude/skills",
+]
+```
+
+Search paths from all config layers are union-merged with dedup (same semantics as `[hooks].deny`).
+
+### Behavior
+
 - Content is wrapped in `<skill name="...">` XML blocks and prepended to prompt
 - If `<skillDir>/scripts/` exists, it is added to the engine `add-dir` list (Codex `--add-dir`)
 - Role skills merge with CLI/JSON skills (role skills first, then explicit)
 - Duplicate skill names are deduplicated
+- `--skip-skills` bypasses skill injection entirely while keeping the role's engine/model/effort/timeout
+- When a skill is not found, the error names: the missing skill, the requesting role, and all paths searched
+
+### Discovering Skills
+
+```bash
+agent-mux config skills        # tabular: NAME, PATH, SOURCE
+agent-mux config skills --json # JSON array of {name, path, source}
+```

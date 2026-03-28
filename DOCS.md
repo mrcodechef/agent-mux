@@ -209,6 +209,23 @@ Overlay is **union-merged** with the base list (appended and deduplicated). Exis
 | `warn` | []string | nil | Patterns that trigger warning |
 | `event_deny_action` | string | `""` | Action on deny match in events: `"kill"` or `"warn"` (empty string = kill behavior) |
 
+#### `[skills]` -- SkillsConfig
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `search_paths` | []string | nil | Directories to search for `<name>/SKILL.md` beyond cwd and configDir. Tilde expansion supported. Union-merged across config layers |
+
+Skill resolution order: (1) `<cwd>/.claude/skills/<name>/SKILL.md`, (2) `<configDir>/.claude/skills/<name>/SKILL.md`, (3) each `<search_path>/<name>/SKILL.md`. First match wins.
+
+Example:
+```toml
+[skills]
+search_paths = [
+  "~/.claude/skills",
+  "~/thinking/pratchett-os/coordinator/.claude/skills",
+]
+```
+
 #### `[pipelines.<name>]` -- PipelineConfig
 
 | Key | Type | Default | Purpose |
@@ -267,6 +284,7 @@ func merge[T comparable](dst *T, value T, defined bool) {
 | `[pipelines.<name>]` | Overlay fully replaces entire pipeline |
 | `[liveness]` / `[timeout]` scalars | Last file with explicit definition wins |
 | `[hooks].deny` / `.warn` | Overlay list union-merged with base (appended + deduplicated) |
+| `[skills].search_paths` | Overlay list union-merged with base (appended + deduplicated) |
 
 ### Profile Loading
 
@@ -291,7 +309,7 @@ First match wins. YAML frontmatter sets `model`, `effort`, `engine`, `skills`, `
 4. **Defaults application** -- fill engine/model/effort from `[defaults]`; effort defaults to `"high"`
 5. **Timeout resolution** -- `TimeoutForEffort(cfg, spec.Effort)` maps effort to seconds
 6. **EngineOpts injection** -- liveness config + permission-mode written to `spec.EngineOpts`
-7. **Skill injection** -- `LoadSkills` reads `SKILL.md` files, wraps in XML, prepends to prompt; script dirs added to `add-dir`
+7. **Skill injection** -- unless `spec.SkipSkills` is true, `LoadSkills` searches cwd, configDir, then `[skills].search_paths` for `SKILL.md` files; wraps in XML, prepends to prompt; script dirs added to `add-dir`. Errors now name the missing skill, requesting role, and all searched paths
 8. **Context file preamble** -- reference to `$AGENT_MUX_CONTEXT` prepended if set
 9. **Hook check** -- deny match aborts; safety preamble injected if rules exist
 10. **Traceability** -- generate salt (adjective-noun-digit) and trace token
@@ -639,8 +657,9 @@ event_deny_action = "warn"   # "kill" (default) or "warn"
 | `--max-turns` | int | `0` | Max agent turns (Claude) |
 | `--add-dir` | []string | `[]` | Additional writable dir (repeatable, Codex) |
 | `--output`, `-o` | string | `"json"` | Output format: `json` or `text` |
+| `--skip-skills` | bool | `false` | Skip skill injection (keep role engine/model/effort) |
 | `--verbose`, `-v` | bool | `false` | Verbose mode |
-| `--version`, `-V` | bool | `false` | Print version |
+| `--version` | bool | `false` | Print version |
 
 ### Mode Detection
 

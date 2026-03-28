@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [3.1.0] - 2026-03-28
+
+### Added
+- **`[skills] search_paths` config key** — list of directories to search for skill SKILL.md files beyond cwd and configDir. Tilde expansion supported. Union-merged across config layers with dedup. Resolution order: (1) cwd, (2) configDir, (3) each search_path
+- **`agent-mux config skills` subcommand** — scans all search roots and displays a deduplicated table of discoverable skills with name, path, and source. `--json` for machine output. First match wins
+- **`--skip-skills` flag** — escape hatch to dispatch a role without skill injection. Also supported in `--stdin` JSON as `"skip_skills": true`. Preserves role's engine/model/effort/timeout
+- **Enhanced skill error messages** — skill-not-found errors now include: which skill was missing, which role injected it, and all paths searched
+
+### Changed
+- **`-V` short flag removed** — `-V` no longer maps to `--version` (agents confused it with `--variant`). Use `--version` (long flag only)
+
+---
+
 ## [3.0.0] - 2026-03-28
 
 ### Added

@@ -417,6 +417,25 @@ JSON object — engine name to model list:
 }
 ```
 
+### config skills --json
+
+JSON array of skill discovery results:
+
+```json
+[
+  {"name":"gaal","path":"/home/user/.claude/skills/gaal/SKILL.md","source":"search_path (~/.claude/skills)"},
+  {"name":"pratchett-read","path":"/home/user/repo/.claude/skills/pratchett-read/SKILL.md","source":"cwd (.claude/skills)"}
+]
+```
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `name` | string | Skill name (directory name) |
+| `path` | string | Absolute path to SKILL.md |
+| `source` | string | Which search root found it (cwd, configDir, or search_path) |
+
+Deduplicated: if the same skill name appears in multiple roots, only the first match (highest-priority root) is shown.
+
 ### Lifecycle Errors
 
 All lifecycle errors emit:

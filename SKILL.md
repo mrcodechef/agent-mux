@@ -23,6 +23,7 @@ calling LLM decides what to do — agent-mux handles the how.
 agent-mux config roles       # live role catalog with engines/models/timeouts
 agent-mux config pipelines   # named multi-step workflows
 agent-mux config models      # valid models per engine
+agent-mux config skills      # discoverable skills across all search paths
 agent-mux config --sources   # which config files are loaded
 ```
 
@@ -198,6 +199,20 @@ Roles set their own timeouts. Check with `agent-mux config roles`.
 - **Wrapper timeout == worker timeout.** Add 60s slack.
 - **Ignoring `status` field.** `timed_out` is not `completed`.
 - **Pipeline output parsed as DispatchResult.** Different JSON shape.
+
+## 10b. Common Mistakes
+
+- **Cross-CWD skill resolution failure.** Roles carry skills that may not
+  exist in the target repo's `.claude/skills/`. When dispatching with
+  `--cwd` pointing to a different project, skills are still searched in
+  order: cwd, configDir, then `[skills] search_paths`. If resolution
+  fails, the error names the missing skill, the requesting role, and all
+  paths searched. Fix: add the skill's parent directory to `search_paths`
+  in config.toml, or use `--skip-skills` as an escape hatch.
+  Run `agent-mux config skills` to verify what's discoverable from
+  the current cwd.
+- **Using `-V` for `--version`.** `-V` no longer exists (it was confused
+  with `--variant`). Use `--version` instead.
 
 ## 11. Reference Index
 

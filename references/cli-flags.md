@@ -46,7 +46,8 @@ Source of truth: `cmd/agent-mux/main.go` (cliFlags struct).
 | `--no-subdispatch` | | bool | `false` | Disable recursive dispatch |
 | `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
 | `--yes` | | bool | `false` | Skip TTY confirmation |
-| `--version` | `-V` | bool | | Print version |
+| `--skip-skills` | | bool | `false` | Skip skill injection (keep role engine/model/effort) |
+| `--version` | | bool | | Print version (no short flag) |
 | `--help` | | bool | | Print help |
 
 ### Codex-specific
@@ -77,6 +78,7 @@ agent-mux config [flags]
 agent-mux config roles [flags]
 agent-mux config pipelines [flags]
 agent-mux config models [flags]
+agent-mux config skills [flags]
 ```
 
 Introspect the fully-resolved, merged configuration. No dispatch is performed.
@@ -120,6 +122,14 @@ Default: tabular NAME, STEPS.
 
 Default: one line per engine — `<engine>: <model>, <model>, ...`.
 
+### `config skills`
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON array instead of tabular output |
+
+Default: tabular table of NAME, PATH, SOURCE. Scans cwd, configDir, and `[skills] search_paths`. Deduplicated: first match wins.
+
 ---
 
 ## DispatchSpec JSON Fields (--stdin)
@@ -139,6 +149,7 @@ When using `--stdin`, pipe a JSON object with these fields.
 | Effort | `effort` | string | - | `high` | `low`, `medium`, `high`, `xhigh` |
 | System prompt | `system_prompt` | string | - | - | Appended system context |
 | Skills | `skills` | string[] | - | `[]` | Skill names to inject |
+| Skip skills | `skip_skills` | bool | - | `false` | Skip skill injection |
 | Pipeline | `pipeline` | string | - | - | Named pipeline from config |
 | Profile | `profile` | string | - | - | Coordinator persona name |
 | Context file | `context_file` | string | - | - | Path to large context file |
