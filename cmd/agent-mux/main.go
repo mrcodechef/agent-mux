@@ -400,7 +400,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 
 	if len(spec.Skills) > 0 {
-		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd, roleConfigDir)
+		skillPrompt, pathDirs, err := config.LoadSkills(spec.Skills, spec.Cwd, roleConfigDir, cfg.Skills.SearchPaths, roleName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}

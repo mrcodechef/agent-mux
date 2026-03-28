@@ -14,6 +14,7 @@ import (
 
 type Config struct {
 	Defaults  DefaultsConfig                     `toml:"defaults"`
+	Skills    SkillsConfig                       `toml:"skills"`
 	Models    map[string][]string                `toml:"models"`
 	Roles     map[string]RoleConfig              `toml:"roles"`
 	Pipelines map[string]pipeline.PipelineConfig `toml:"pipelines"`
@@ -22,6 +23,10 @@ type Config struct {
 	Hooks     HooksConfig                        `toml:"hooks"`
 
 	meta *toml.MetaData
+}
+
+type SkillsConfig struct {
+	SearchPaths []string `toml:"search_paths"`
 }
 
 type DefaultsConfig struct {
@@ -192,6 +197,10 @@ func mergeConfig(base, overlay *Config) {
 	merge(&base.Defaults.ResponseMaxChars, overlay.Defaults.ResponseMaxChars, overlay.defined("defaults", "response_max_chars"))
 	merge(&base.Defaults.MaxDepth, overlay.Defaults.MaxDepth, overlay.defined("defaults", "max_depth"))
 	merge(&base.Defaults.AllowSubdispatch, overlay.Defaults.AllowSubdispatch, overlay.defined("defaults", "allow_subdispatch"))
+
+	if overlay.defined("skills", "search_paths") || len(overlay.Skills.SearchPaths) > 0 {
+		base.Skills.SearchPaths = deduplicateStrings(append(base.Skills.SearchPaths, overlay.Skills.SearchPaths...))
+	}
 
 	if len(overlay.Models) > 0 {
 		if base.Models == nil {

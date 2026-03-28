@@ -10,26 +10,29 @@ import (
 	"github.com/buildoak/agent-mux/internal/sanitize"
 )
 
+// SkillSearchResult describes a discovered skill and where it was found.
+type SkillSearchResult struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	Source string `json:"source"`
+}
+
 // LoadSkills loads skill SKILL.md files by name and returns a concatenated prompt
 // block and a list of scripts directories to add to PATH.
 //
-// Skills are resolved relative to cwd (<cwd>/.claude/skills/<name>/SKILL.md).
-// If configDir is non-empty and a skill is not found relative to cwd, resolution
-// falls back to configDir (<configDir>/.claude/skills/<name>/SKILL.md). This
-// handles the case where a role defines skills in its config directory but the
-// dispatch cwd is a different project directory.
-func LoadSkills(names []string, cwd string, configDir string) (prompt string, pathDirs []string, err error) {
+// Resolution order:
+//  1. <cwd>/.claude/skills/<name>/SKILL.md
+//  2. <configDir>/.claude/skills/<name>/SKILL.md  (if configDir != "" and != cwd)
+//  3. Each path in searchPaths: <search_path>/<name>/SKILL.md
+//
+// roleName is used only for error messages — it names the role that requested the skill.
+func LoadSkills(names []string, cwd string, configDir string, searchPaths []string, roleName string) (prompt string, pathDirs []string, err error) {
 	if len(names) == 0 {
 		return "", nil, nil
 	}
 
-	skillsRoot := filepath.Join(cwd, ".claude", "skills")
-
-	// Fallback skills root: use configDir when it differs from cwd.
-	var fallbackSkillsRoot string
-	if configDir != "" && configDir != cwd {
-		fallbackSkillsRoot = filepath.Join(configDir, ".claude", "skills")
-	}
+	// Build the ordered list of search roots.
+	roots := buildSearchRoots(cwd, configDir, searchPaths)
 
 	seen := make(map[string]struct{}, len(names))
 	blocks := make([]string, 0, len(names))
@@ -45,29 +48,9 @@ func LoadSkills(names []string, cwd string, configDir string) (prompt string, pa
 		}
 		seen[name] = struct{}{}
 
-		// Try primary location (cwd-relative).
-		resolvedRoot := skillsRoot
-		skillFile := filepath.Join(resolvedRoot, name, "SKILL.md")
-		content, readErr := os.ReadFile(skillFile)
-		if readErr != nil && os.IsNotExist(readErr) && fallbackSkillsRoot != "" {
-			// Primary not found — try fallback (configDir-relative).
-			fallbackSkillFile := filepath.Join(fallbackSkillsRoot, name, "SKILL.md")
-			fallbackContent, fallbackErr := os.ReadFile(fallbackSkillFile)
-			if fallbackErr == nil {
-				// Resolved via fallback.
-				resolvedRoot = fallbackSkillsRoot
-				skillFile = fallbackSkillFile
-				content = fallbackContent
-				readErr = nil
-			}
-		}
+		resolvedRoot, content, readErr := resolveSkill(name, roots)
 		if readErr != nil {
-			if os.IsNotExist(readErr) {
-				// Report available skills from all searched roots.
-				avail := availableSkillsMulti(skillsRoot, fallbackSkillsRoot)
-				return "", nil, fmt.Errorf("skill %q not found at %q. Available skills: %v", name, skillFile, avail)
-			}
-			return "", nil, fmt.Errorf("read skill %q: %w", name, readErr)
+			return "", nil, skillNotFoundError(name, roleName, roots)
 		}
 
 		trimmed := strings.TrimRight(string(content), "\r\n")
@@ -86,17 +69,130 @@ func LoadSkills(names []string, cwd string, configDir string) (prompt string, pa
 	return strings.Join(blocks, "\n"), pathDirs, nil
 }
 
-func availableSkills(skillsRoot string) []string {
-	return availableSkillsMulti(skillsRoot, "")
+// searchRoot describes one root directory to search for skills and a
+// human-readable label for error messages.
+type searchRoot struct {
+	dir   string
+	label string
 }
 
-// availableSkillsMulti returns a deduplicated, sorted list of skill names found
-// under primary and (optionally) fallback skills roots.
-func availableSkillsMulti(primary, fallback string) []string {
+// buildSearchRoots returns the ordered list of skill search roots.
+func buildSearchRoots(cwd string, configDir string, searchPaths []string) []searchRoot {
+	roots := make([]searchRoot, 0, 2+len(searchPaths))
+
+	// 1. CWD-relative
+	roots = append(roots, searchRoot{
+		dir:   filepath.Join(cwd, ".claude", "skills"),
+		label: "cwd (.claude/skills)",
+	})
+
+	// 2. ConfigDir-relative (only if different from cwd)
+	if configDir != "" && configDir != cwd {
+		roots = append(roots, searchRoot{
+			dir:   filepath.Join(configDir, ".claude", "skills"),
+			label: "configDir (.claude/skills)",
+		})
+	}
+
+	// 3. Explicit search_paths
+	for _, sp := range searchPaths {
+		expanded := expandHome(sp)
+		roots = append(roots, searchRoot{
+			dir:   expanded,
+			label: fmt.Sprintf("search_path (%s)", sp),
+		})
+	}
+
+	return roots
+}
+
+// resolveSkill tries each root in order and returns the root directory,
+// file content, and nil error on success. On failure it returns a non-nil error.
+func resolveSkill(name string, roots []searchRoot) (resolvedRoot string, content []byte, err error) {
+	for _, root := range roots {
+		skillFile := filepath.Join(root.dir, name, "SKILL.md")
+		data, readErr := os.ReadFile(skillFile)
+		if readErr == nil {
+			return root.dir, data, nil
+		}
+		if !os.IsNotExist(readErr) {
+			return "", nil, fmt.Errorf("read skill %q from %s: %w", name, root.label, readErr)
+		}
+	}
+	return "", nil, fmt.Errorf("not found")
+}
+
+// skillNotFoundError builds a detailed error message including the role name
+// and all paths that were searched.
+func skillNotFoundError(skillName, roleName string, roots []searchRoot) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "skill %q not found", skillName)
+	if roleName != "" {
+		fmt.Fprintf(&b, " (injected by role %q)", roleName)
+	}
+	b.WriteString(". Searched:\n")
+	for _, root := range roots {
+		fmt.Fprintf(&b, "  - %s: %s\n", root.label, filepath.Join(root.dir, skillName, "SKILL.md"))
+	}
+	avail := availableSkillsFromRoots(roots)
+	if len(avail) > 0 {
+		fmt.Fprintf(&b, "Available skills: %v", avail)
+	} else {
+		b.WriteString("No skills found in any search path.")
+	}
+	return fmt.Errorf("%s", b.String())
+}
+
+// DiscoverSkills scans all known search roots and returns deduplicated skills
+// with the winning (first-match) path and source label. Used by `config skills`.
+func DiscoverSkills(cwd string, configDir string, searchPaths []string) []SkillSearchResult {
+	roots := buildSearchRoots(cwd, configDir, searchPaths)
 	seen := make(map[string]struct{})
-	collectSkills(primary, seen)
-	if fallback != "" {
-		collectSkills(fallback, seen)
+	var results []SkillSearchResult
+
+	for _, root := range roots {
+		entries, err := os.ReadDir(root.dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			name := entry.Name()
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			// Verify SKILL.md exists
+			skillFile := filepath.Join(root.dir, name, "SKILL.md")
+			if _, err := os.Stat(skillFile); err != nil {
+				continue
+			}
+			seen[name] = struct{}{}
+			results = append(results, SkillSearchResult{
+				Name:   name,
+				Path:   skillFile,
+				Source: root.label,
+			})
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
+	return results
+}
+
+func availableSkills(skillsRoot string) []string {
+	return availableSkillsFromRoots([]searchRoot{{dir: skillsRoot}})
+}
+
+// availableSkillsFromRoots returns a deduplicated, sorted list of skill names
+// found across all search roots.
+func availableSkillsFromRoots(roots []searchRoot) []string {
+	seen := make(map[string]struct{})
+	for _, root := range roots {
+		collectSkills(root.dir, seen)
 	}
 	out := make([]string, 0, len(seen))
 	for name := range seen {
@@ -116,4 +212,22 @@ func collectSkills(skillsRoot string, seen map[string]struct{}) {
 			seen[entry.Name()] = struct{}{}
 		}
 	}
+}
+
+// expandHome replaces a leading ~ with the user's home directory.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	if strings.HasPrefix(path, "~/") {
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
