@@ -1,465 +1,88 @@
 # agent-mux
-[![CI](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml/badge.svg)](https://github.com/buildoak/agent-mux/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Three problems this solves:
+Cross-harness dispatch layer. One CLI, one JSON contract, any LLM engine.
 
-1. **Claude Code can't natively use Codex as a subagent.** Claude already has `Task` subagents and is a natural prompt master — it knows how to delegate. But it can't reach Codex or OpenCode out of the box. agent-mux bridges that gap: Claude dispatches Codex workers the same way it dispatches its own subagents.
+> **Go rewrite.** agent-mux was recently rewritten from TypeScript to Go — static binary, goroutine-based supervision, no runtime dependencies.
+> The TS version is preserved on the `agent-mux-ts` branch.
+> See [DOCS.md](DOCS.md) for the full technical reference.
 
-2. **Codex has no subagent system at all.** No `Task` tool, no nested agents, no orchestration primitives. agent-mux gives Codex the ability to spawn workers across any engine — including Claude — through one CLI command with one JSON contract. With `--coordinator`, Codex can even launch a full GSD orchestrator that dispatches nested agents inside it — the same multi-step pipeline that Claude Code gets via `Task`.
+## What It Does
 
-3. **The 10x pattern.** Inside Claude Code's `Task` subagents, you can spawn agent-mux workers. Claude architects the plan, Codex executes the code, a second Claude verifies the result — all within one coordinated pipeline. This is how [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator) works.
+AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated — each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them: any LLM can dispatch work to any other LLM through one JSON contract and one config system. Roles, variants, and pipelines turn good dispatch patterns into reusable TOML config.
 
-One CLI. One output contract. Any engine. agent-mux works as both a worker dispatch tool and an orchestrator spawn tool, so the same command can run direct tasks or coordinator-driven pipelines. Runtime: Bun (`#!/usr/bin/env bun`). Browser automation (`--browser`) additionally requires Node and the `agent-browser` CLI.
+## Core Principles
 
-## What you get
-- **Dispatch + orchestration in one tool** — run direct worker tasks or launch coordinator personas from the same CLI.
-- **Unified output contract** — all engines return the same JSON shape, no format translation.
-- **Skill injection** — load reusable `SKILL.md` runbooks with `--skill`, dispatch through any engine.
-- **Coordinator mode** — load orchestrator personas from `--coordinator` with frontmatter-driven defaults.
-- **Heartbeat protocol** — progress signals every 15s on stderr for long-running tasks.
-- **Effort-scaled timeouts** — task duration automatically adjusts based on complexity level.
-- **Activity tracking** — structured log of files changed, commands run, files read, and MCP calls for every run.
-
-## The 10x Pattern
-Inside Claude Code, you spawn `Task` subagents. Those subagents can call `agent-mux` to dispatch Codex workers. Claude architects the plan, Codex executes the code, and Claude reads the result and verifies it.
-
-Concrete flow:
-1. Claude Task subagent receives `Refactor auth module`.
-2. Subagent calls `agent-mux --engine codex --sandbox workspace-write --reasoning high "Refactor auth module in src/auth/"`.
-3. Subagent parses JSON output, reads the `response` field, and verifies the changes.
-
-`agent-mux` is the execution substrate, not an orchestrator. Coordination logic lives in the calling agent (`Task`, `gsd-coordinator`, etc.). Reference implementation: [gsd-coordinator](https://github.com/buildoak/fieldwork-skills/tree/main/skills/gsd-coordinator).
-
-## Prerequisites
-**Runtime:** [Bun](https://bun.sh) >= 1.0.0
-
-**API keys** (only the engine you use needs its key):
-
-| Engine | Env Var | Notes |
-| --- | --- | --- |
-| `codex` | `OPENAI_API_KEY` | API key **or** OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
-| `claude` | `ANTHROPIC_API_KEY` | Claude Code SDK also supports device OAuth when no key is set |
-| `opencode` | `OPENROUTER_API_KEY` | Or configure provider-specific keys directly in OpenCode |
-
-> **Note — Anthropic ToS compliance:** The `claude` engine uses Claude Code SDK with your API key (`ANTHROPIC_API_KEY`) — this is the fully compliant path. Device OAuth (subscription login) falls under Anthropic's Consumer ToS §3.7 which restricts automated/scripted access outside the API. **Recommended: always use `ANTHROPIC_API_KEY` for the `claude` engine.** See [issue #1](https://github.com/buildoak/agent-mux/issues/1) for discussion.
-
-**MCP clusters** are optional and only needed with `--mcp-cluster`.
+1. **Tool, not orchestrator.** The calling LLM decides what to do. agent-mux handles the how.
+2. **Job done is holy.** Artifacts persist across timeout and process death. Every dispatch has an artifact path.
+3. **Errors are steering signals.** Every error tells the caller what failed, why, and what to try next.
+4. **Single-shot with curated context.** One well-prompted dispatch beats a swarm of under-specified workers.
+5. **Config over code.** Roles, pipelines, models, timeouts — all TOML. The binary is generic.
+6. **Simplest viable dispatch.** CLI call > config > code. Escalate only when needed.
 
 ## Quick Start
+
 ```bash
 git clone https://github.com/buildoak/agent-mux && cd agent-mux
-./setup.sh
-bun run src/agent.ts --engine codex "Review src/core.ts for timeout edge cases"
+go build -o agent-mux ./cmd/agent-mux
 ```
 
-To register the `agent-mux` command globally: `bun link`
+**Minimal dispatch** (JSON via `--stdin` — the canonical invocation pattern):
+
+```bash
+printf '{"engine":"codex","prompt":"Review src/core.go for timeout edge cases","cwd":"/repo"}' \
+  | ./agent-mux --stdin
+```
+
+**Role-based dispatch** (engine, model, effort, timeout resolved from `config.toml`):
+
+```bash
+printf '{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/repo"}' \
+  | ./agent-mux --stdin
+```
+
+Output is always a single JSON object on stdout. stderr carries NDJSON event stream and heartbeat lines.
 
 ## Engines
 
-| Engine | SDK | Best At | Default Model | Other Models |
-| --- | --- | --- | --- | --- |
-| `codex` | `@openai/codex-sdk` | Precise implementation and code edits | `gpt-5.4` | `gpt-5.4-mini` (2x+ faster, 272K ctx), `gpt-5.3-codex-spark` (1000+ tok/s), `gpt-5.3-codex`, `gpt-5.2-codex` |
-| `claude` | `@anthropic-ai/claude-agent-sdk` | Planning, architecture, long-form reasoning | `claude-sonnet-4-20250514` | `claude-opus-4-6` |
-| `opencode` | `@opencode-ai/sdk` | Model diversity and cross-checking | `openrouter/moonshotai/kimi-k2.5` | See presets |
+| Engine | Binary | Best For | Default Model |
+|--------|--------|----------|---------------|
+| `codex` | `codex` | Implementation, debugging, code edits | `gpt-5.4` |
+| `claude` | `claude` | Planning, synthesis, long-form reasoning | `claude-sonnet-4-20250514` |
+| `gemini` | `gemini` | Second opinion, contrast checks | `gemini-2.5-pro` |
 
-## CLI Reference
-Prompt is required as positional text:
+Engine CLIs must be installed separately — agent-mux dispatches to them, it does not bundle them.
 
-```bash
-agent-mux --engine <codex|claude|opencode> [flags] "your prompt"
-```
+## Features
 
-### Common Flags
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--engine` | `-E` | `codex`, `claude`, `opencode` | required | Engine selection |
-| `--cwd` | `-C` | path | current directory | Working directory |
-| `--model` | `-m` | string | engine-specific | Model override |
-| `--effort` | `-e` | `low`, `medium`, `high`, `xhigh` | `medium` | Drives default timeout |
-| `--timeout` | `-t` | positive integer ms | effort-scaled | Hard timeout override |
-| `--system-prompt` | `-s` | string | unset | Appended system prompt |
-| `--system-prompt-file` |  | string | unset | Load system prompt from file (path relative to `--cwd`) |
-| `--coordinator` |  | string | unset | Load coordinator spec from `<cwd>/.claude/agents/<name>.md` |
-| `--skill` |  | string (repeatable) | none | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
-| `--mcp-cluster` |  | string (repeatable) | none | Enables named cluster(s) |
-| `--browser` | `-b` | boolean | `false` | Sugar for `--mcp-cluster browser` |
-| `--full` | `-f` | boolean | `false` | Full-access mode (Codex: danger-full-access + network; Claude: bypassPermissions; OpenCode: no effect) |
-| `--help` | `-h` | boolean | `false` | Show help |
-| `--version` | `-V` | boolean | `false` | Show version |
+- **Role-based dispatch** — Roles resolve engine, model, effort, timeout, skills, and system prompt from TOML config. One field replaces six flags.
+- **Variant system** — Swap engines within a role while keeping the same semantics. `{"role":"lifter","variant":"claude"}` runs a lifter with Claude instead of Codex.
+- **Pipeline orchestration** — Multi-step chains, fan-out parallelism, and handoff rendering between steps. Defined in TOML, not code.
+- **Recovery and signals** — Continue timed-out work with `--recover`. Steer live dispatches with inbox signals.
+- **Two-phase timeout** — Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
+- **Event streaming** — 13 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `artifact_written`, `soft_timeout`, and more.
+- **Hooks** — Pattern-based deny/warn rules evaluated on harness events. Safety preamble injection.
+- **Profiles and coordinators** — Load orchestrator personas from markdown specs with frontmatter-driven defaults.
+- **Skill injection** — Load `SKILL.md` runbooks into the dispatch prompt. Skills carry scripts, references, and setup.
+- **Liveness supervision** — 5-second watchdog cycle detects hung harnesses. Process-group signals ensure grandchildren die with the harness.
+- **Artifact-first design** — Artifact directory created before the harness starts. `ScanArtifacts()` runs on every terminal state.
 
-Effort defaults:
+## API Keys
 
-| Effort | Timeout |
-| --- | --- |
-| `low` | `120000` ms (2 min) |
-| `medium` | `600000` ms (10 min) |
-| `high` | `1800000` ms (30 min) |
-| `xhigh` | `2700000` ms (45 min) |
+| Engine | Env Var |
+|--------|---------|
+| Codex | `OPENAI_API_KEY` |
+| Claude | `ANTHROPIC_API_KEY` |
+| Gemini | `GEMINI_API_KEY` |
 
-`agent-mux` prepends a time-budget instruction to every prompt, telling the agent how much wall-clock time it has. This affects agent behavior -- agents will scope their work to fit the budget.
+## Documentation
 
-### Codex Flags
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--sandbox` |  | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
-| `--reasoning` | `-r` | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Reasoning effort (maps to Codex `model_reasoning_effort`) |
-| `--network` | `-n` | boolean | `true` | Enabled by default |
-| `--codex-path` |  | path | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
-| `--add-dir` | `-d` | path (repeatable) | none | Additional writable dirs |
-
-`--codex-path` and `AGENT_MUX_CODEX_PATH` are opt-in only. When neither is set, agent-mux keeps the SDK's default Codex binary resolution unchanged. Relative override paths resolve from `--cwd` (or the current directory if `--cwd` is unset).
-
-### Claude Flags
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--permission-mode` | `-p` | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | `--full` forces `bypassPermissions` |
-| `--max-turns` |  | positive integer | effort-scaled (`5/15/30/50`) | Effort-based defaults: low=5, medium=15, high=30, xhigh=50 turns |
-| `--max-budget` |  | positive number (USD) | unset | Budget cap |
-| `--allowed-tools` |  | comma-separated list | unset | When MCP clusters are active, `mcp_*` wildcards are auto-appended to the allowed tools list. |
-
-### OpenCode Flags
-| Flag | Short | Values | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--variant` |  | preset/model string | unset | Shorthand model selector |
-| `--agent` |  | string | unset | OpenCode agent name |
-
-OpenCode presets include `kimi`, `kimi-k2.5`, `glm`, `glm-5`, `deepseek`, `deepseek-r1`, `qwen`, `qwen-coder`, `qwen-max`, `free`, plus `kimi-free`, `glm-free`, `opencode-kimi`, `opencode-minimax`.
-
-## Output Contract
-`agent-mux` returns one unified JSON contract for all engines.
-
-```json
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "agent-mux output",
-  "oneOf": [
-    {
-      "type": "object",
-      "description": "Successful run (including timeout with partial results).",
-      "required": ["success", "engine", "response", "timed_out", "completed", "duration_ms", "activity", "metadata"],
-      "properties": {
-        "success": { "const": true, "description": "Always true for success payloads." },
-        "engine": { "enum": ["codex", "claude", "opencode"], "description": "Engine used for the run." },
-        "response": { "type": "string", "description": "Agent text response. On timeout this can be a placeholder." },
-        "timed_out": { "type": "boolean", "description": "True if timeout fired and run was aborted via AbortSignal." },
-        "completed": { "type": "boolean", "description": "True only when work ran to completion (success && !timed_out). Single source of truth for done-ness." },
-        "duration_ms": { "type": "number", "description": "End-to-end runtime in milliseconds." },
-        "activity": { "$ref": "#/$defs/activity" },
-        "metadata": {
-          "type": "object",
-          "description": "Engine-reported metadata (shape varies by SDK).",
-          "properties": {
-            "session_id": { "type": "string" },
-            "cost_usd": { "type": "number" },
-            "tokens": {
-              "type": "object",
-              "properties": {
-                "input": { "type": "number" },
-                "output": { "type": "number" },
-                "reasoning": { "type": "number" }
-              }
-            },
-            "turns": { "type": "number" },
-            "model": { "type": "string" }
-          },
-          "additionalProperties": true
-        }
-      },
-      "additionalProperties": false
-    },
-    {
-      "type": "object",
-      "description": "Failure payload.",
-      "required": ["success", "engine", "error", "code", "duration_ms", "activity"],
-      "properties": {
-        "success": { "const": false, "description": "Always false for error payloads." },
-        "engine": { "enum": ["codex", "claude", "opencode"] },
-        "error": { "type": "string", "description": "Human-readable error." },
-        "code": { "enum": ["INVALID_ARGS", "MISSING_API_KEY", "SDK_ERROR"], "description": "Failure class." },
-        "duration_ms": { "type": "number" },
-        "activity": { "$ref": "#/$defs/activity" }
-      },
-      "additionalProperties": false
-    }
-  ],
-  "$defs": {
-    "activity": {
-      "type": "object",
-      "description": "Structured activity log collected during execution.",
-      "required": ["files_changed", "commands_run", "files_read", "mcp_calls", "heartbeat_count"],
-      "properties": {
-        "files_changed": { "type": "array", "items": { "type": "string" } },
-        "commands_run": { "type": "array", "items": { "type": "string" } },
-        "files_read": { "type": "array", "items": { "type": "string" } },
-        "mcp_calls": { "type": "array", "items": { "type": "string" } },
-        "heartbeat_count": { "type": "number", "description": "Heartbeat lines emitted to stderr." }
-      },
-      "additionalProperties": false
-    }
-  }
-}
-```
-
-Timed-out and gracefully-stopped runs return `success: true` with `timed_out: true`. The `response` field may contain partial output or a placeholder. Downstream parsers should always check the `timed_out` field.
-
-`stdout` is reserved for the final JSON payload. `stderr` carries heartbeat lines and filtered SDK output. Never mix the two when parsing.
-
-## Skill System
-Load external skills with repeatable `--skill` flags:
-
-```bash
-agent-mux --engine codex --skill reviewer --skill migrations "Review and harden schema migration"
-```
-
-Core mechanics:
-- `--skill <name>` resolves `SKILL.md` from `<cwd>/.claude/skills/<name>/SKILL.md`.
-- Skill contents are injected into the prompt as prepended `<skill name="...">...</skill>` XML blocks.
-- If `<skillDir>/scripts/` exists, it is prepended to `PATH` for the run.
-- On Codex, each resolved skill directory is auto-added to writable `addDirs` (`--add-dir` behavior).
-- Path traversal protection rejects invalid names that escape skills root (for example `..`) and absolute `/...` paths.
-
-### agent-mux as a skill
-`agent-mux` itself ships as a skill via `SKILL.md` at the repo root, with `setup.sh` for first-time setup. An AI agent can read `SKILL.md`, run `setup.sh`, and start dispatching workers autonomously.
-
-Clone the repo, read `SKILL.md`, run `setup.sh`, and invoke `agent-mux` -- the skill document teaches the agent everything it needs.
-
-### Skill anatomy
-A skill is a directory under `<cwd>/.claude/skills/<name>/` containing at minimum a `SKILL.md` file.
-
-Optional components:
-- `scripts/` directory (auto-added to `PATH`)
-- `references/` directory (loaded on demand)
-- `setup.sh` (for first-time install)
-
-Skills are injected as `<skill name="...">` XML blocks prepended to the prompt.
-
-## MCP Clusters
-Define clusters in YAML and enable them per run.
-
-Search order:
-1. `./mcp-clusters.yaml`
-2. `~/.config/agent-mux/mcp-clusters.yaml`
-
-Example:
-
-```yaml
-clusters:
-  browser:
-    description: "Browser automation"
-    servers:
-      agent-browser:
-        command: node
-        args:
-          - ./src/mcp-servers/agent-browser.mjs
-  research:
-    description: "Web research"
-    servers:
-      exa:
-        command: bunx
-        args: [exa-mcp-server]
-        env:
-          EXA_API_KEY: "your-api-key"
-```
-
-`--browser` is sugar for `--mcp-cluster browser`.
-The special name `all` merges every cluster defined in your config. On Codex, non-selected cluster servers are explicitly disabled to prevent unintended tool exposure.
-
-```bash
-agent-mux --engine codex --browser "Capture a screenshot"
-agent-mux --engine claude --mcp-cluster research "Find OAuth rotation docs"
-agent-mux --engine opencode --mcp-cluster all "Cross-check findings"
-```
-
-## Coordinator Mode
-Coordinators are markdown specs that let any engine load a "fat orchestrator" persona in one flag.
-
-Location:
-- `<cwd>/.claude/agents/<name>.md` (loaded via `--coordinator <name>`)
-
-Format:
-- Optional YAML frontmatter
-- Markdown body after frontmatter
-
-Frontmatter fields:
-- `skills` (array): auto-injected as repeatable `--skill`
-- `model` (string): default model unless `--model` is passed on the CLI
-- `allowedTools` (string or array): passed to the Claude adapter and merged with `--allowed-tools`
-
-Body behavior:
-- The markdown body becomes the coordinator system prompt.
-- Prompt composition order is: coordinator body -> `--system-prompt-file` content -> `--system-prompt` inline text.
-
-Example coordinator file (`<cwd>/.claude/agents/reviewer.md`):
-
-```md
----
-skills:
-  - code-review
-  - test-writer
-model: claude-sonnet-4-20250514
-allowedTools:
-  - Bash
-  - Read
-  - Write
----
-You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
-```
-
-Example invocation:
-
-```bash
-agent-mux --engine claude --cwd . --coordinator reviewer --system-prompt-file prompts/repo.md --system-prompt "Prioritize auth and billing paths." "Review recent changes for regressions."
-```
-
-Flag interactions:
-- `--model` overrides frontmatter `model`.
-- Frontmatter `skills` merge with explicit `--skill` flags.
-- For Claude, frontmatter `allowedTools` merges with `--allowed-tools`.
-- `--system-prompt-file` is resolved relative to `--cwd`; missing files, directories, malformed frontmatter, missing coordinator files, and path traversal attempts return `INVALID_ARGS`.
-
-### GSD Coordinator
-agent-mux ships with a reference GSD (Get Shit Done) coordinator spec at `references/get-shit-done-agent.md` — a multi-step task orchestrator that coordinates Codex and Claude workers.
-
-The GSD coordinator provides:
-- **Model selection heuristics** — when to use Codex vs Claude vs Spark
-- **Orchestration patterns** — 10x Pattern, Fan-Out, Research + Synthesize
-- **Output contracts** — consistent return format for worker results
-- **Context discipline** — rules for efficient context management across workers
-
-Copy the reference spec into your coordinator directory and invoke it:
-
-```bash
-mkdir -p .claude/agents
-cp references/get-shit-done-agent.md .claude/agents/gsd-coordinator.md
-agent-mux --engine claude --coordinator gsd-coordinator "Plan and execute the release hardening workstream."
-```
-
-The spec is a template. Customize the frontmatter skills list and output paths for your project.
-
-This works from **any engine** — Claude Code, Codex, or OpenCode. The GSD coordinator runs as a Claude Opus session via agent-mux and dispatches nested workers (Codex, Claude, Spark) through agent-mux calls inside it. Codex users get the same orchestration depth as Claude Code's `Task(subagent_type="gsd-coordinator")`, with no platform lock-in.
-
-## Installation
-### 1) As a Claude Code skill
-```bash
-git clone https://github.com/buildoak/agent-mux ~/.claude/skills/agent-mux
-cd ~/.claude/skills/agent-mux
-./setup.sh
-```
-
-Optional global CLI registration:
-
-```bash
-bun link
-```
-
-### 2) As a Codex CLI tool
-```bash
-git clone https://github.com/buildoak/agent-mux
-cd agent-mux
-./setup.sh
-bun link
-```
-
-To let Codex discover the bundled workflow instructions, append the repo `SKILL.md` into your `AGENTS.md`:
-
-```bash
-printf "\n\n## agent-mux\n\n" >> AGENTS.md
-cat SKILL.md >> AGENTS.md
-```
-
-### 3) As a standalone CLI
-```bash
-git clone https://github.com/buildoak/agent-mux
-cd agent-mux
-./setup.sh
-bun link
-bun run src/agent.ts --engine codex "Summarize this repo"
-```
-
-For a detailed installation walkthrough (including Codex CLI setup), see [references/installation-guide.md](references/installation-guide.md).
-
-## Bundled Reference Docs
 | Doc | What |
-| --- | --- |
-| `references/engine-comparison.md` | Detailed engine table, timeout mapping, sandbox/permission modes |
-| `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison tables |
-| `references/output-contract.md` | Full JSON schema with field descriptions and examples |
-| `references/installation-guide.md` | Agent-readable installation walkthrough for Claude Code and Codex CLI |
-| `references/get-shit-done-agent.md` | GSD coordinator reference spec (multi-step task orchestration template) |
-
-For release history, see `CHANGELOG.md`. For full operational usage, see `SKILL.md`.
-
-## Staying Updated
-
-agent-mux ships with structured update infrastructure for AI agents:
-
-| File | Purpose |
-| --- | --- |
-| `UPDATES.md` | Structured changelog listing new, changed, and removed files per release |
-| `UPDATE-GUIDE.md` | Step-by-step instructions for AI agents to apply updates safely |
-
-To check for updates, tell your AI agent: "Check UPDATES.md in agent-mux for any new features or changes."
-
-To apply updates, tell your agent: "Read UPDATE-GUIDE.md and apply the latest changes from UPDATES.md."
-
-The update guide ensures customized files (like `mcp-clusters.yaml`) are never overwritten without asking.
-
-## Troubleshooting
-**`agent-mux: command not found`**
-
-Run `bun link` in the repo or invoke directly:
-
-```bash
-bun run /path/to/agent-mux/src/agent.ts --engine codex "your prompt"
-```
-
-**`MISSING_API_KEY` error**
-
-`agent-mux` warns when an API key env var is missing, but it does not hard-fail if another auth path is available.
-
-- Codex supports OAuth fallback via `codex auth` (`~/.codex/auth.json`) when `OPENAI_API_KEY` is unset.
-- Claude SDK supports device OAuth when `ANTHROPIC_API_KEY` is unset.
-- `MISSING_API_KEY` appears only when no supported auth method is available for the selected engine.
-
-**`Unknown MCP cluster: '...'`**
-
-Create config from the template and update it:
-
-```bash
-cp mcp-clusters.example.yaml ~/.config/agent-mux/mcp-clusters.yaml
-```
-
-**`OpenCode binary not found`**
-
-Install OpenCode CLI and ensure `opencode` is on `PATH`.
-
-**Timeout with no output**
-
-Use `--effort high`/`xhigh` or increase `--timeout`.
-
-**SDK-specific errors**
-
-Inspect stderr and test engine wiring with:
-
-```bash
-bun run src/agent.ts --engine codex "Say hello"
-```
-
-## Contributing
-```bash
-git clone https://github.com/buildoak/agent-mux && cd agent-mux
-bun install
-bun test
-bunx tsc --noEmit
-```
-
-## What setup.sh Does
-The bootstrap script is idempotent:
-1. Installs Bun dependencies
-2. Runs TypeScript type-check
-3. Copies mcp-clusters.example.yaml to ~/.config/agent-mux/ if no config exists
-4. Checks which API keys are available and reports status
+|-----|------|
+| [DOCS.md](DOCS.md) | Full technical reference — architecture, config schema, dispatch lifecycle |
+| [SKILL.md](SKILL.md) | Operational manual for AI agents using agent-mux |
+| [FEATURES.md](FEATURES.md) | Open feature requests and known limitations |
+| [references/](references/) | Engine comparison, prompting guide, output contract schema, installation guide |
 
 ## License
+
 [MIT](./LICENSE)
