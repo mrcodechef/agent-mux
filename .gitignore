@@ -1,9 +1,18 @@
+# Compiled binaries
+agent-mux
+agent-mux-v2
+*.exe
+
+# Go build cache
+.tmp/
+
+# Legacy TS artifacts (should not reappear)
 node_modules/
 dist/
 *.tgz
-.DS_Store
 
-# MCP cluster config may contain API keys and secrets
+# Secrets
 mcp-clusters.yaml
-.tmp/
-agent-mux
+
+# OS
+.DS_Store

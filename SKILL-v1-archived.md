@@ -1,0 +1,344 @@
+---
+name: agent-mux
+description: |
+  Unified subagent dispatch layer for Codex, Claude Code, and OpenCode engines.
+  Spawn workers, run parallel execution pipelines, and get one strict JSON output contract.
+  Use this skill when you need to: dispatch a subagent, spawn an agent worker,
+  run multi-model pipelines, invoke codex/claude/opencode engines, or coordinate
+  parallel execution across AI coding engines. Covers unified output parsing,
+  timeout/heartbeat behavior, skill injection, and MCP cluster configuration.
+  Keywords: subagent, dispatch, worker, codex, claude, opencode, parallel execution,
+  multi-model, spawn agent, engine, unified output.
+---
+
+# agent-mux
+
+One CLI for Codex, Claude, and OpenCode with one strict JSON contract.
+
+```bash
+agent-mux --engine <codex|claude|opencode> [options] "prompt"
+```
+
+> If `agent-mux` is not linked globally, run `bun run src/agent.ts ...` from this repo.
+
+---
+
+## Setup
+
+```bash
+git clone https://github.com/buildoak/agent-mux.git /path/to/agent-mux
+cd /path/to/agent-mux && ./setup.sh && bun link
+```
+
+- **Claude Code:** copy this repo into `.claude/skills/agent-mux/`
+- **Codex CLI:** append this SKILL.md content to your project's root `AGENTS.md`
+
+For the full installation walkthrough (prerequisites, verification, troubleshooting), see [references/installation-guide.md](references/installation-guide.md).
+
+---
+
+## Quick Reference
+
+```bash
+# Codex: implementation, debugging, concrete code changes
+agent-mux --engine codex --cwd /repo --reasoning high --effort high "Implement retries in src/http/client.ts"
+
+# Codex Mini: cost-efficient, high-volume subagent tasks
+agent-mux --engine codex --model gpt-5.4-mini --cwd /repo --reasoning high "Review and fix error handling in src/api/"
+
+# Codex Spark: fast grunt work and broad scan/edit tasks
+agent-mux --engine codex --model gpt-5.3-codex-spark --cwd /repo --reasoning high "Add doc comments across src/"
+
+# Claude: architecture, reasoning, synthesis
+agent-mux --engine claude --cwd /repo --effort high --permission-mode bypassPermissions "Design rollout plan for auth refactor"
+
+# OpenCode: third opinion, model diversity, cost-flexible checks
+agent-mux --engine opencode --cwd /repo --model kimi "Review this patch and challenge assumptions"
+
+# Skill injection (repeatable)
+agent-mux --engine codex --cwd /repo --skill react --skill test-writer "Implement + test dark mode"
+
+# MCP clusters
+agent-mux --engine claude --cwd /repo --mcp-cluster knowledge "Find canonical docs for token rotation"
+
+# --browser sugar for browser cluster
+agent-mux --engine codex --cwd /repo --browser "Open app, inspect controls, summarize findings"
+
+# Full access mode
+agent-mux --engine codex --cwd /repo --full "Install deps and implement requested fix"
+
+# System prompt from file
+agent-mux --engine claude --cwd /repo --system-prompt-file prompts/reviewer.md "Review this patch"
+
+# Coordinator persona
+agent-mux --engine codex --cwd /repo --coordinator reviewer "Audit this change for regressions"
+
+# Combine coordinator + extra skill + inline system prompt
+agent-mux --engine claude --cwd /repo --coordinator reviewer --skill perf-auditor --system-prompt "Prioritize latency risks." "Evaluate this service update"
+```
+
+---
+
+## Engine Selection Protocol
+
+Use this decision tree:
+
+1. Code execution, file edits, implementation -> **Codex** with `--reasoning high`.
+2. Cost-efficient subagent tasks, high-volume parallel work -> **Codex Mini** with `--model gpt-5.4-mini` (2x+ faster than 5.4, 272K context).
+3. Fast grunt work, filesystem scanning, parallel worker throughput -> **Codex Spark** with `--model gpt-5.3-codex-spark`.
+4. Architecture, deep reasoning, multi-file analysis, synthesis, writing -> **Claude**.
+5. Model diversity, third-opinion checks, cost-flexible runs -> **OpenCode**.
+
+_Note: Pratchett-OS coordinator uses Codex + Claude only._
+
+> For engine-specific prompting tips, model variants, and comparison tables, see [references/prompting-guide.md](references/prompting-guide.md).
+
+---
+
+## CLI Flags
+
+Source of truth: `src/core.ts` (`parseCliArgs`) + `src/types.ts`.
+
+### Common (all engines)
+
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--engine` | `-E` | string | `codex`, `claude`, `opencode` | required | Engine selector |
+| `--cwd` | `-C` | string | path | current directory | Working directory |
+| `--model` | `-m` | string | model id | engine default | Model override |
+| `--effort` | `-e` | string | `low`, `medium`, `high`, `xhigh` | `medium` | Effort level |
+| `--timeout` | `-t` | string | positive integer (ms) | effort-mapped | Hard timeout override |
+| `--system-prompt` | `-s` | string | text | unset | Appended system context |
+| `--system-prompt-file` | -- | string | path to file | unset | Loads file as system prompt, joined with other prompts |
+| `--coordinator` | -- | string | coordinator name | unset | Loads spec from `<cwd>/.claude/agents/<name>.md` |
+| `--skill` | -- | string[] | repeatable names | `[]` | Loads `<cwd>/.claude/skills/<name>/SKILL.md` |
+| `--mcp-cluster` | -- | string[] | repeatable names | `[]` | Enables MCP cluster(s) |
+| `--browser` | `-b` | boolean | true/false | `false` | Adds `browser` cluster |
+| `--full` | `-f` | boolean | true/false | `false` | Full access mode |
+| `--version` | `-V` | boolean | true/false | `false` | Print version |
+| `--help` | `-h` | boolean | true/false | `false` | Print help |
+
+### Codex-specific
+
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--sandbox` | -- | string | `danger-full-access`, `workspace-write`, `read-only` | `danger-full-access` | `--full` also forces `danger-full-access` |
+| `--reasoning` | `-r` | string | `minimal`, `low`, `medium`, `high`, `xhigh` | `medium` | Model reasoning effort (maps to Codex config key `model_reasoning_effort`) |
+| `--network` | `-n` | boolean | true/false | `true` | Enabled by default; `--full` also forces `true` |
+| `--codex-path` | -- | string | path to Codex binary | unset | Overrides the Codex CLI binary; `AGENT_MUX_CODEX_PATH` is the env var equivalent |
+| `--add-dir` | `-d` | string[] | repeatable paths | `[]` | Additional writable dirs |
+
+### Claude-specific
+
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--permission-mode` | `-p` | string | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `bypassPermissions` | `--full` also resolves to `bypassPermissions` |
+| `--max-turns` | -- | string | positive integer | effort-derived if unset | Parsed to number when valid |
+| `--max-budget` | -- | string | positive number (USD) | unset | Parsed to `maxBudgetUsd` |
+| `--allowed-tools` | -- | string | comma-separated tool list | unset | Split into string array |
+
+### OpenCode-specific
+
+| Flag | Short | Type | Values | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `--variant` | -- | string | preset/model string | unset | Used if `--model` absent |
+| `--agent` | -- | string | agent name | unset | OpenCode agent selection |
+
+### Canonical enum values (from `src/types.ts`)
+
+- Engine names: `codex`, `claude`, `opencode`
+- Effort levels: `low`, `medium`, `high`, `xhigh`
+
+> For timeout/effort mapping, sandbox modes, and permission details, see [references/engine-comparison.md](references/engine-comparison.md).
+
+---
+
+## Output Contract
+
+All engines emit one JSON payload to `stdout`. Parse JSON, never text.
+
+Success shape: `{ success: true, engine, response, timed_out, completed, duration_ms, activity, metadata }`
+Error shape: `{ success: false, engine, error, code, duration_ms, activity }`
+
+Error codes: `INVALID_ARGS`, `MISSING_API_KEY`, `SDK_ERROR`.
+
+Heartbeat: every 15s on `stderr` (`[heartbeat] 45s -- processing`). `stdout` is reserved for final JSON.
+
+> For full JSON schema, field descriptions, and examples, see [references/output-contract.md](references/output-contract.md).
+
+---
+
+## Skills
+
+Use `--skill <name>` (repeatable). Resolves from `<cwd>/.claude/skills/<name>/SKILL.md`.
+
+- Skill content prepended as `<skill>` XML blocks
+- If `<skillDir>/scripts` exists, prepended to `PATH`
+- For Codex, skill directories auto-appended to sandbox `addDirs`
+- Path traversal names are rejected
+
+---
+
+## Coordinator Mode
+
+Use `--coordinator <name>` to load a coordinator spec from `<cwd>/.claude/agents/<name>.md`.
+
+Coordinator file format: Markdown with optional YAML frontmatter.
+
+- Frontmatter `skills` (array): auto-injected as repeated `--skill`
+- Frontmatter `model` (string): default model unless CLI `--model` is set
+- Frontmatter `allowedTools` (string or array): Claude-only, merged with CLI `--allowed-tools`
+- Markdown body after frontmatter: coordinator system prompt content
+
+Example coordinator file (`<cwd>/.claude/agents/reviewer.md`):
+
+```md
+---
+skills:
+  - code-review
+  - test-writer
+model: claude-sonnet-4-20250514
+allowedTools:
+  - Bash
+  - Read
+  - Write
+---
+You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
+```
+
+Example invocations:
+
+```bash
+# Load coordinator persona
+agent-mux --engine claude --cwd /repo --coordinator reviewer "Review recent changes"
+
+# Coordinator + file prompt + inline prompt (all three compose in order)
+agent-mux --engine codex --cwd /repo --coordinator reviewer --system-prompt-file prompts/repo.md --system-prompt "Prioritize auth paths" "Audit this module"
+```
+
+Prompt composition order:
+
+1. Coordinator body (`--coordinator`)
+2. File content (`--system-prompt-file`)
+3. Inline text (`--system-prompt`)
+
+Flag interactions:
+
+- `--model` on CLI overrides frontmatter `model`
+- Frontmatter `skills` merge with explicit `--skill` flags (coordinator skills first)
+- For Claude, frontmatter `allowedTools` merge with `--allowed-tools`
+
+Validation and errors:
+
+- Coordinator path traversal is rejected
+- Missing coordinator file returns `INVALID_ARGS`
+- Malformed frontmatter returns `INVALID_ARGS`
+- `--system-prompt-file` resolves relative to `--cwd`
+- Missing prompt file or directory path returns `INVALID_ARGS`
+
+### GSD Coordinator Reference
+
+agent-mux ships with a reference GSD (Get Shit Done) coordinator spec at [references/get-shit-done-agent.md](references/get-shit-done-agent.md).
+
+This is a multi-step task coordinator that orchestrates Codex and Claude workers for complex pipelines. It includes:
+- Model selection heuristics (when to use Codex vs Claude vs Spark)
+- Orchestration patterns (10x Pattern, Fan-Out, Research + Synthesize)
+- Output contracts and context discipline rules
+- Anti-patterns to avoid
+
+To use the GSD coordinator:
+
+```bash
+# Copy to your project
+cp references/get-shit-done-agent.md <project>/.claude/agents/get-shit-done-agent.md
+
+# Invoke via agent-mux
+agent-mux --engine claude --cwd <project> --coordinator get-shit-done-agent "Complex multi-step task"
+
+# Or from Claude Code via Task subagent
+Task(subagent_type="gsd-coordinator")
+```
+
+Customize the frontmatter `skills` list and output paths for your project. The spec is a template designed to be adapted.
+
+---
+
+## MCP Clusters
+
+Config search: `./mcp-clusters.yaml` then `~/.config/agent-mux/mcp-clusters.yaml`.
+
+`--mcp-cluster` is repeatable. `all` merges all clusters. `--browser` is sugar for `--mcp-cluster browser`.
+
+Bundled server: `src/mcp-servers/agent-browser.mjs` (browser automation).
+
+See `mcp-clusters.example.yaml` for config format.
+
+---
+
+## Bundled Resources Index
+
+| Path | What | When to load |
+| --- | --- | --- |
+| `references/output-contract.md` | Full output schema, examples, field descriptions | Parsing agent output, debugging response shape |
+| `references/prompting-guide.md` | Engine-specific prompting tips, model variants, comparison | Crafting prompts for specific engines |
+| `references/engine-comparison.md` | Detailed engine table, timeouts, sandbox/permission modes | Choosing engine config, debugging options |
+| `references/get-shit-done-agent.md` | GSD coordinator spec (reference template) | Setting up multi-step task coordination |
+| `references/installation-guide.md` | Full installation walkthrough | First-time setup, prerequisites, troubleshooting |
+| `src/agent.ts` | CLI entrypoint and adapter dispatch | Trace invocation path |
+| `src/core.ts` | parseCliArgs, timeout, heartbeat, output assembly | Always for behavior truth |
+| `src/types.ts` | Canonical engine/effort/output types | Always for contract truth |
+| `src/mcp-clusters.ts` | MCP config discovery and merge logic | MCP cluster setup/debug |
+| `src/engines/codex.ts` | Codex adapter | Codex option/event behavior |
+| `src/engines/claude.ts` | Claude adapter | Claude permissions/turn behavior |
+| `src/engines/opencode.ts` | OpenCode adapter + model presets | OpenCode model routing |
+| `src/mcp-servers/agent-browser.mjs` | Bundled browser MCP wrapper | Browser automation integration |
+| `setup.sh` | Bootstrap script | First install or environment repair |
+| `mcp-clusters.example.yaml` | Starter MCP config | Creating cluster config |
+| `CHANGELOG.md` | Release history | Verify version-specific behavior |
+| `tests/` | Test suite | Validate changes/regressions |
+
+---
+
+## Timeout Alignment
+
+When calling agent-mux from a wrapper (Claude Code `Task`, Bash `timeout`, shell scripts), the wrapper's timeout **must exceed** agent-mux's internal timeout by at least 60 seconds. Otherwise the wrapper kills the process before agent-mux's graceful timeout path fires, losing activity logs and the `timed_out: true` JSON response.
+
+| Effort | agent-mux timeout | Wrapper minimum timeout |
+|--------|-------------------|------------------------|
+| `low` | 2 min (120s) | 3 min (180s / 180000ms) |
+| `medium` | 10 min (600s) | 11 min (660s / 660000ms) |
+| `high` | 30 min (1800s) | 31 min (1860s / 1860000ms) |
+| `xhigh` | 45 min (2700s) | 46 min (2760s / 2760000ms) |
+
+**Rule:** `wrapper_timeout = agent_mux_timeout + 60_000ms`
+
+## Completed Field
+
+The `completed` boolean on success output is the single source of truth for whether work finished:
+- `completed: true` — work ran to completion (normal exit)
+- `completed: false` — work was interrupted (timeout or shutdown)
+
+Callers MUST check `completed` (or at minimum `timed_out`) before treating output as final. Checking only `success` will treat timeouts as completions.
+
+---
+
+## Anti-Patterns
+
+- Do not parse agent-mux output as text. Always parse JSON from stdout.
+- Do not run parallel browser workers. One browser session at a time.
+- Do not read agent output files with full Read; use `tail -n 20` via Bash.
+- Do not use `--reasoning minimal` with MCP tools (Codex rejects them).
+- Do not send exploration tasks to Codex; use Claude for open-ended work.
+- Do not use `xhigh` effort for routine tasks; `high` is the workhorse.
+
+---
+
+## Staying Updated
+
+This skill ships with an `UPDATES.md` changelog and `UPDATE-GUIDE.md` for your AI agent.
+
+After installing, tell your agent: "Check `UPDATES.md` in the agent-mux skill for any new features or changes."
+
+When updating, tell your agent: "Read `UPDATE-GUIDE.md` and apply the latest changes from `UPDATES.md`."
+
+Follow `UPDATE-GUIDE.md` so customized local files are diffed before any overwrite.
