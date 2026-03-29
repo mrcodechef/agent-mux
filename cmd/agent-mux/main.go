@@ -252,8 +252,8 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 	}
 
-	if flags.stdin && stdinDispatchFlagsSet(flagsSet) {
-		fmt.Fprintf(stderr, "Warning: --stdin mode active; CLI dispatch flags are ignored.\n")
+	if flags.stdin {
+		mergeStdinCLIFlags(spec, flags, flagsSet)
 	}
 
 	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
@@ -446,9 +446,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		spec.Prompt = contextFilePromptPreamble + "\n" + spec.Prompt
 	}
 
-	recoverDispatchID := flags.recover
-	if flags.stdin {
-		recoverDispatchID = spec.ContinuesDispatchID
+	recoverDispatchID := spec.ContinuesDispatchID
+	if !flags.stdin {
+		recoverDispatchID = flags.recover
 	}
 	if recoverDispatchID != "" {
 		recoveryCtx, err := recovery.RecoverDispatch(recoverDispatchID)
@@ -1574,6 +1574,124 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Con
 		eng.SetStreamMode(event.StreamSilent)
 	}
 	return eng.Dispatch(ctx, spec)
+}
+
+// mergeStdinCLIFlags merges explicitly-set CLI flags into a DispatchSpec that
+// was decoded from --stdin JSON. CLI flags take precedence over JSON fields,
+// allowing callers to override specific spec fields without rewriting the JSON.
+func mergeStdinCLIFlags(spec *types.DispatchSpec, flags cliFlags, flagsSet map[string]bool) {
+	if flagsSet["skill"] {
+		// CLI skills prepend so they take precedence over JSON skills during
+		// resolution (first match wins in the skill resolver).
+		spec.Skills = append(append([]string(nil), flags.skills...), spec.Skills...)
+	}
+	if flagsSet["skip-skills"] {
+		spec.SkipSkills = flags.skipSkills
+	}
+	if flagsSet["context-file"] {
+		spec.ContextFile = flags.contextFile
+	}
+	if flagsSet["recover"] {
+		spec.ContinuesDispatchID = flags.recover
+	}
+	if flagsSet["engine"] || flagsSet["E"] {
+		spec.Engine = flags.engine
+	}
+	if flagsSet["model"] || flagsSet["m"] {
+		spec.Model = flags.model
+	}
+	if flagsSet["effort"] || flagsSet["e"] {
+		spec.Effort = flags.effort
+	}
+	if flagsSet["role"] || flagsSet["R"] {
+		spec.Role = flags.role
+	}
+	if flagsSet["variant"] {
+		spec.Variant = flags.variant
+	}
+	if flagsSet["profile"] || flagsSet["coordinator"] {
+		p, _ := resolveProfileName(flags.profile, flags.coordinator)
+		spec.Profile = p
+	}
+	if flagsSet["cwd"] || flagsSet["C"] {
+		spec.Cwd = flags.cwd
+	}
+	if flagsSet["timeout"] || flagsSet["t"] {
+		spec.TimeoutSec = flags.timeout
+	}
+	if flagsSet["system-prompt"] || flagsSet["s"] {
+		if spec.SystemPrompt == "" {
+			spec.SystemPrompt = flags.systemPrompt
+		} else {
+			spec.SystemPrompt = spec.SystemPrompt + "\n\n" + flags.systemPrompt
+		}
+	}
+	if flagsSet["system-prompt-file"] {
+		data, err := os.ReadFile(flags.systemPromptFile)
+		if err == nil {
+			if spec.SystemPrompt == "" {
+				spec.SystemPrompt = string(data)
+			} else {
+				spec.SystemPrompt = string(data) + "\n\n" + spec.SystemPrompt
+			}
+		}
+	}
+	if flagsSet["salt"] {
+		spec.Salt = flags.salt
+	}
+	if flagsSet["pipeline"] || flagsSet["P"] {
+		spec.Pipeline = flags.pipeline
+	}
+	if flagsSet["max-depth"] {
+		spec.MaxDepth = flags.maxDepth
+	}
+	if flagsSet["no-subdispatch"] {
+		spec.AllowSubdispatch = !flags.noSubdispatch
+	}
+	if flagsSet["response-max-chars"] {
+		spec.ResponseMaxChars = flags.responseMaxChars
+	}
+	if flagsSet["full"] || flagsSet["f"] {
+		spec.FullAccess = flags.full
+	}
+	if flagsSet["no-full"] && flags.noFull {
+		spec.FullAccess = false
+	}
+	if flagsSet["artifact-dir"] {
+		spec.ArtifactDir = flags.artifactDir
+	}
+	// Engine opts that live in the map.
+	if flagsSet["sandbox"] {
+		if spec.EngineOpts == nil {
+			spec.EngineOpts = make(map[string]any)
+		}
+		spec.EngineOpts["sandbox"] = flags.sandbox
+	}
+	if flagsSet["reasoning"] || flagsSet["r"] {
+		if spec.EngineOpts == nil {
+			spec.EngineOpts = make(map[string]any)
+		}
+		spec.EngineOpts["reasoning"] = flags.reasoning
+	}
+	if flagsSet["max-turns"] {
+		if spec.EngineOpts == nil {
+			spec.EngineOpts = make(map[string]any)
+		}
+		spec.EngineOpts["max-turns"] = flags.maxTurns
+	}
+	if flagsSet["permission-mode"] {
+		if spec.EngineOpts == nil {
+			spec.EngineOpts = make(map[string]any)
+		}
+		spec.EngineOpts["permission-mode"] = flags.permissionMode
+	}
+	if flagsSet["add-dir"] {
+		if spec.EngineOpts == nil {
+			spec.EngineOpts = make(map[string]any)
+		}
+		existing := anySliceOrEmpty(spec.EngineOpts["add-dir"])
+		spec.EngineOpts["add-dir"] = append([]string(flags.addDirs), existing...)
+	}
 }
 
 func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {

@@ -132,8 +132,9 @@ branching, or fan-in in `PipelineStep`):
 ---
 
 ### F-10: Pipeline verification gates
-**Type:** feature | **Priority:** P2 | **Status:** open (park alongside F-3)
+**Type:** feature | **Priority:** P2 | **Status:** open (park alongside F-3) — design documented
 **Location:** `internal/pipeline/`
+**Design:** `references/streaming-protocol-v2.md` § "Future: Pipeline Verification Gates"
 **Decided:** `CURRENT_SESSION` (2026-03-29)
 
 Field analysis of GSD-Heavy usage reveals a structural gap in pipelines: they
@@ -160,8 +161,9 @@ P2 until pipeline usage justifies the investment.
 ---
 
 ### S-1: `repeat_escalation` liveness
-**Type:** spec gap | **Priority:** P2 | **Status:** open — not implemented
+**Type:** spec gap | **Priority:** P2 | **Status:** open — not implemented, design documented
 **Reference:** `_archive/SPEC-V2.md`
+**Design:** `references/streaming-protocol-v2.md` § "Future: Repeat Escalation Liveness"
 **Decided:** `acabe588` (2026-03-29)
 
 **Not implemented** (confirmed: zero matches for `repeat_escalation`,

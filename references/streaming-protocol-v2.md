@@ -176,6 +176,122 @@ Configuration:
 
 **Resume cycle failure during steer:** Inbox message triggers resume, but harness fails to restart. The existing `resume_start_failed` error path handles this -- dispatch enters `failed` state, result is built from whatever was collected. The steerer sees `failed` on next `ax status`.
 
+## Future: Soft Stdin Steering (Codex)
+
+**Status:** P2 design note — not building now.
+
+When async dispatch is active, the host process could create a named FIFO at
+`{artifact_dir}/stdin.pipe`. The host would open the read end and forward bytes
+to the Codex child process's stdin. `ax steer <id> nudge` would open the write
+end and push the nudge message directly into the pipe.
+
+This bypasses the resume cycle entirely for Codex — no kill, no restart, no
+session continuation overhead. The worker receives the nudge as if the user
+typed it, mid-tool-call or between turns.
+
+**Per-engine feasibility:**
+- **Codex:** Full support. Codex reads stdin natively. The FIFO is a clean fit.
+- **Claude Code / Gemini:** Not applicable. Neither reads stdin for mid-flight
+  instructions. These engines would continue using the inbox → resume cycle.
+
+**Why not build now:** The inbox → resume cycle works for all engines. The FIFO
+approach is a latency optimization for Codex only. Worth building when Codex
+steering frequency justifies the added complexity (named pipe lifecycle,
+cleanup on crash, cross-platform support).
+
+---
+
+## Future: Pipeline Verification Gates (F-10)
+
+**Status:** P2 design note — not building now.
+
+### Problem
+
+Pipelines are fire-and-forget sequences. GSD-Heavy — the most sophisticated
+pipeline user — does not use them for anything beyond `tenx` fan-out because
+there is no mechanism to assert that a prior step's side effects are correct
+before proceeding. Adding another LLM auditor step is slow, expensive, and
+introduces hallucination risk.
+
+### Design
+
+Each `PipelineStep` gains an optional `gate` field: a shell command that runs
+after the step completes. If the gate exits 0, the pipeline proceeds. If
+non-zero, the pipeline halts with a `gate_failed` error including the step
+name, gate command, and stderr output.
+
+```toml
+[[pipelines.build.steps]]
+  role = "lifter"
+  prompt = "implement the feature described in TICKET.md"
+  gate = "cd $CWD && go test ./..."
+
+[[pipelines.build.steps]]
+  role = "reviewer"
+  prompt = "review the changes for correctness"
+  gate = "cd $CWD && go vet ./..."
+```
+
+### Semantics
+
+- `$CWD` is expanded to the dispatch working directory.
+- `$ARTIFACT_DIR` is expanded to the step's artifact directory.
+- The gate runs in a clean shell (`/bin/sh -c`), not inside the worker process.
+- Gate timeout: 60s default, configurable via `gate_timeout_sec` on the step.
+- Gate stdout/stderr are captured and included in the pipeline result on failure.
+
+### Relation to F-3 (Conditional Branching)
+
+Gates catch failures; branching handles them. A gate that fails could trigger a
+branch to a recovery step (e.g., re-run the lifter with error context). Both
+features are complementary and park at P2 until pipeline usage justifies the
+investment.
+
+---
+
+## Future: Repeat Escalation Liveness (S-1)
+
+**Status:** P2 design note — not building now.
+
+### Problem
+
+A worker can enter a loop: retrying the same failing command, re-reading the
+same file, or generating the same output without progress. The current watchdog
+detects silence (no output) but not repetition (same output). A looping worker
+is active enough to reset the silence timer but making zero progress.
+
+### Design
+
+The event loop in `loop.go` already processes `tool_start` events with command
+details. Repeat escalation would add a sliding window detector:
+
+1. **Window:** Track the last N `tool_start` events (default N=5).
+2. **Detection:** If 3+ of the last 5 events share the same command string
+   (exact match or normalized), emit a `repeat_detected` event.
+3. **Escalation ladder:**
+   - First detection: emit `repeat_warning` to `events.jsonl`. No action.
+   - Second detection (within 60s of first): write an inbox nudge: "You appear
+     to be repeating the same action without progress. Try a different
+     approach."
+   - Third detection (within 60s of second): abort the dispatch with status
+     `repeat_killed`. Include the repeated command in the error message.
+4. **Reset:** Any non-repeated `tool_start` resets the escalation ladder.
+
+### Hook Point
+
+The detector would sit in `handleEvent()` in `loop.go`, alongside the existing
+`lastActivity` update. It reads from the same event stream — no new goroutines
+or channels needed.
+
+### Configuration
+
+- `repeat_window` (engine_opts, default 5) — sliding window size.
+- `repeat_threshold` (engine_opts, default 3) — matches within window to trigger.
+- `repeat_escalation_timeout` (engine_opts, default 60) — seconds between
+  escalation ladder steps.
+
+---
+
 ## Relation to Existing Backlog
 
 - **F-9 (`--quiet`):** Superseded by Tier 1. `--quiet` becomes the default; `--stream` is the opt-in. F-9 can be closed when Tier 1 ships.
