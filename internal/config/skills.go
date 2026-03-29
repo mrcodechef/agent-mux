@@ -208,9 +208,17 @@ func collectSkills(skillsRoot string, seen map[string]struct{}) {
 		return
 	}
 	for _, entry := range entries {
-		if entry.IsDir() {
-			seen[entry.Name()] = struct{}{}
+		if !entry.IsDir() {
+			continue
 		}
+		// Only include directories that actually contain SKILL.md — otherwise ghost
+		// directories (e.g. stale checkouts, partial installs) appear in the
+		// "Available skills" error message and mislead the user.
+		skillFile := filepath.Join(skillsRoot, entry.Name(), "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			continue
+		}
+		seen[entry.Name()] = struct{}{}
 	}
 }
 

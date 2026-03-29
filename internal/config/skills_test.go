@@ -130,6 +130,34 @@ func TestLoadSkillsNotFoundIncludesSearchedPaths(t *testing.T) {
 	}
 }
 
+// TestAvailableSkillsExcludesGhostDirs verifies that collectSkills does not include
+// directories that are missing SKILL.md in the "Available skills" error message.
+func TestAvailableSkillsExcludesGhostDirs(t *testing.T) {
+	cwd := t.TempDir()
+
+	// Real skill with SKILL.md.
+	writeSkillFile(t, cwd, "real", "Real skill content.")
+
+	// Ghost directory: exists but has no SKILL.md.
+	ghostDir := filepath.Join(cwd, ".claude", "skills", "ghost")
+	if err := os.MkdirAll(ghostDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll ghost: %v", err)
+	}
+
+	_, _, err := LoadSkills([]string{"missing"}, cwd, "", nil, "")
+	if err == nil {
+		t.Fatal("LoadSkills error = nil, want error")
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "real") {
+		t.Fatalf("error = %q, want real skill listed in Available skills", msg)
+	}
+	if strings.Contains(msg, "ghost") {
+		t.Fatalf("error = %q, ghost dir without SKILL.md should NOT appear in Available skills", msg)
+	}
+}
+
 func TestLoadSkillsNotFoundIncludesRoleName(t *testing.T) {
 	cwd := t.TempDir()
 
