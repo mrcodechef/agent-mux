@@ -196,6 +196,56 @@ func eventTypes(events []Event) []string {
 	return types
 }
 
+// noErrorEvents checks that no events with Type=="error" appear in events.jsonl.
+// Use in happy-path tests to catch silent tool failures that the worker swallowed.
+// Ignores events where ErrorCode is in the allow list (benign/expected errors).
+func noErrorEvents(allowCodes ...string) func(Result) Verdict {
+	allow := make(map[string]bool, len(allowCodes))
+	for _, c := range allowCodes {
+		allow[c] = true
+	}
+	return func(r Result) Verdict {
+		var errs []string
+		for _, e := range r.Events {
+			if e.Type == "error" && !allow[e.ErrorCode] {
+				errs = append(errs, fmt.Sprintf("%s: %s", e.ErrorCode, e.Message))
+			}
+		}
+		if len(errs) > 0 {
+			return Verdict{
+				Pass:   false,
+				Score:  0.0,
+				Reason: fmt.Sprintf("found %d unexpected error events: %v", len(errs), errs),
+				Events: eventTypes(r.Events),
+			}
+		}
+		return Verdict{Pass: true, Score: 1.0, Reason: "no error events in events.jsonl", Events: eventTypes(r.Events)}
+	}
+}
+
+// hasErrorEvent checks that at least one error event exists in events.jsonl.
+// Use to verify that tool failures are properly propagated to the event log.
+func hasErrorEvent() func(Result) Verdict {
+	return func(r Result) Verdict {
+		for _, e := range r.Events {
+			if e.Type == "error" {
+				return Verdict{
+					Pass:   true,
+					Score:  1.0,
+					Reason: fmt.Sprintf("error event found: %s: %s", e.ErrorCode, e.Message),
+					Events: eventTypes(r.Events),
+				}
+			}
+		}
+		return Verdict{
+			Pass:   false,
+			Score:  0.0,
+			Reason: "no error events found in events.jsonl",
+			Events: eventTypes(r.Events),
+		}
+	}
+}
+
 // dedup removes duplicate strings preserving order.
 func dedup(ss []string) []string {
 	seen := make(map[string]bool, len(ss))

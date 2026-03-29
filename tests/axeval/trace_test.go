@@ -26,6 +26,7 @@ func TestTraceVerification(t *testing.T) {
 	t.Logf("=== Trace Verification: %d cases ===", len(traceCases))
 
 	var verdicts []TraceVerdict
+	skipped := 0
 	for _, tc := range traceCases {
 		tc := tc
 		t.Run("trace/"+tc.Name, func(t *testing.T) {
@@ -38,12 +39,14 @@ func TestTraceVerification(t *testing.T) {
 			// Skip trace analysis for failed dispatches where stdout isn't JSON.
 			if result.Status == "parse_error" {
 				t.Logf("SKIP: case %s had parse_error, no trace to analyze", tc.Name)
+				skipped++
 				return
 			}
 
 			verdict, err := RunTraceVerification(binaryPath, tc.Name, tc.Prompt, &result)
 			if err != nil {
 				t.Logf("WARN: trace verification failed for %s: %v", tc.Name, err)
+				skipped++
 				return
 			}
 
@@ -54,8 +57,8 @@ func TestTraceVerification(t *testing.T) {
 			if !verdict.Pass {
 				passStr = "FAIL"
 			}
-			t.Logf("[TRACE %s] %s: flags=%v first_action=%s turns=%d tools=%d errors=%d",
-				passStr, tc.Name, verdict.Flags, verdict.FirstAction,
+			t.Logf("[TRACE %s] %s: source=%s flags=%v first_action=%s turns=%d tools=%d errors=%d",
+				passStr, tc.Name, verdict.Source, verdict.Flags, verdict.FirstAction,
 				verdict.TurnsUsed, verdict.ToolCalls, verdict.ErrorCount)
 			t.Logf("  reasoning: %s", verdict.Reasoning)
 		})
@@ -63,7 +66,7 @@ func TestTraceVerification(t *testing.T) {
 
 	// Write trace report.
 	if len(verdicts) > 0 {
-		if err := writeTraceReport(verdicts); err != nil {
+		if err := writeTraceReportWithSkipped(verdicts, skipped); err != nil {
 			t.Errorf("failed to write trace report: %v", err)
 		}
 		printTraceSummary(t, verdicts)

@@ -557,6 +557,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		}
 		restarting = true
 		runReadyForRestart = false
+
+		// Differentiate nudge vs redirect via inbox prefix.
+		message = formatSteerMessage(message)
+
 		_ = emitter.EmitProgress("Coordinator injection received; restarting harness session.")
 
 		if !alreadyExited {
@@ -1158,4 +1162,19 @@ func intEngineOpt(spec *types.DispatchSpec, key string, fallback int) int {
 		}
 	}
 	return fallback
+}
+
+// formatSteerMessage detects [NUDGE] or [REDIRECT] prefixes on inbox messages
+// and reformats them with appropriate framing for the resume cycle.
+// Messages without a recognized prefix pass through unchanged.
+func formatSteerMessage(message string) string {
+	if strings.HasPrefix(message, "[REDIRECT] ") {
+		body := strings.TrimPrefix(message, "[REDIRECT] ")
+		return "IMPORTANT: The coordinator has redirected your task. Stop your current approach and follow these new instructions instead:\n" + body
+	}
+	if strings.HasPrefix(message, "[NUDGE] ") {
+		body := strings.TrimPrefix(message, "[NUDGE] ")
+		return "Note from coordinator: " + body
+	}
+	return message
 }

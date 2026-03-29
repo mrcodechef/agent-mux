@@ -29,6 +29,16 @@ type TraceVerdict struct {
 	ToolCalls    int      `json:"tool_calls"`
 	ErrorCount   int      `json:"error_count"`
 	FirstAction  string   `json:"first_action"` // what did agent try first
+	Source       string   `json:"source"`        // "llm" or "deterministic"
+	InputTokens  int      `json:"input_tokens,omitempty"`
+	OutputTokens int      `json:"output_tokens,omitempty"`
+}
+
+// TraceDiff captures run-over-run variance.
+type TraceDiff struct {
+	Regressions  []string `json:"regressions"`
+	Improvements []string `json:"improvements"`
+	Stable       int      `json:"stable"`
 }
 
 // TraceReport is the JSON structure written to trace-report.json.
@@ -37,6 +47,7 @@ type TraceReport struct {
 	Timestamp string         `json:"timestamp"`
 	Verdicts  []TraceVerdict `json:"verdicts"`
 	Summary   TraceSummary   `json:"summary"`
+	Diff      *TraceDiff     `json:"diff,omitempty"`
 }
 
 // TraceSummary provides aggregate stats across all trace verdicts.
@@ -133,17 +144,23 @@ func RunTraceVerification(binary string, caseName string, casePrompt string, res
 	// 4. Build the event timeline summary for the analyzer.
 	timelineSummary := buildTimelineSummary(events)
 
-	// 5. Dispatch Codex trace analyzer via agent-mux.
+	// 5. Dispatch Codex trace analyzer via agent-mux (with 1 retry).
 	analyzerResult, err := dispatchTraceAnalyzer(binary, caseName, casePrompt, timelineSummary, verdict)
+	if err != nil {
+		// Retry once with a longer timeout.
+		analyzerResult, err = dispatchTraceAnalyzerRetry(binary, caseName, casePrompt, timelineSummary, verdict)
+	}
 	if err != nil {
 		// Analyzer failed — still return what we have from deterministic analysis.
 		verdict.Reasoning = fmt.Sprintf("analyzer dispatch failed: %v (deterministic analysis only)", err)
 		verdict.Pass = verdict.ErrorCount == 0
+		verdict.Source = "deterministic"
 		applyDeterministicFlags(verdict, events)
 		return verdict, nil
 	}
 
 	// 6. Parse analyzer response into verdict.
+	verdict.Source = "llm"
 	mergeAnalyzerResult(verdict, analyzerResult)
 
 	return verdict, nil
@@ -256,54 +273,92 @@ func enrichFromGaal(verdict *TraceVerdict, sessionID string) {
 	if cost, ok := session["cost_usd"].(float64); ok && cost > 0 {
 		verdict.CostUSD = cost
 	}
+
+	// Extract token counts from gaal inspect --tokens output.
+	if tokens, ok := session["tokens"].(map[string]any); ok {
+		if input, ok := tokens["input"].(float64); ok {
+			verdict.InputTokens = int(input)
+		}
+		if output, ok := tokens["output"].(float64); ok {
+			verdict.OutputTokens = int(output)
+		}
+	}
+
+	// Extract turns if gaal provides them and we don't have them yet.
+	if verdict.TurnsUsed == 0 {
+		if turns, ok := session["turns"].(float64); ok && turns > 0 {
+			verdict.TurnsUsed = int(turns)
+		}
+	}
 }
 
 // buildTimelineSummary formats events into a readable timeline for the analyzer.
+// Cap at 100 events. If more than 100, keep the first 40 + last 60 (tail-weighted)
+// because errors tend to cluster near the end.
 func buildTimelineSummary(events []traceEvent) string {
 	if len(events) == 0 {
 		return "(no events captured)"
 	}
 
+	var selected []traceEvent
+	omitted := 0
+	omitAfter := -1 // index after which we insert the omission marker
+
+	if len(events) <= 100 {
+		selected = events
+	} else {
+		head := events[:40]
+		tail := events[len(events)-60:]
+		selected = make([]traceEvent, 0, 100)
+		selected = append(selected, head...)
+		selected = append(selected, tail...)
+		omitted = len(events) - 100
+		omitAfter = 40
+	}
+
 	var sb strings.Builder
-	for i, evt := range events {
-		if i >= 50 {
-			sb.WriteString(fmt.Sprintf("... (%d more events truncated)\n", len(events)-50))
-			break
+	for i, evt := range selected {
+		if omitAfter >= 0 && i == omitAfter {
+			sb.WriteString(fmt.Sprintf("[...] %d events omitted\n", omitted))
 		}
-
-		ts := evt.Timestamp
-		if ts == "" {
-			ts = "?"
-		}
-
-		switch evt.Type {
-		case "dispatch_start":
-			sb.WriteString(fmt.Sprintf("[%s] START engine=%s model=%s\n", ts, evt.Engine, evt.Model))
-		case "dispatch_end":
-			sb.WriteString(fmt.Sprintf("[%s] END status=%s duration=%dms\n", ts, evt.Status, evt.DurationMS))
-		case "tool_start":
-			sb.WriteString(fmt.Sprintf("[%s] TOOL_START %s args=%s\n", ts, evt.Tool, truncateStr(evt.Args, 100)))
-		case "tool_end":
-			sb.WriteString(fmt.Sprintf("[%s] TOOL_END %s duration=%dms\n", ts, evt.Tool, evt.DurationMS))
-		case "file_read":
-			sb.WriteString(fmt.Sprintf("[%s] READ %s\n", ts, evt.Path))
-		case "file_write":
-			sb.WriteString(fmt.Sprintf("[%s] WRITE %s\n", ts, evt.Path))
-		case "command_run":
-			sb.WriteString(fmt.Sprintf("[%s] COMMAND %s\n", ts, truncateStr(evt.Command, 100)))
-		case "error":
-			sb.WriteString(fmt.Sprintf("[%s] ERROR code=%s msg=%s\n", ts, evt.ErrorCode, truncateStr(evt.Message, 100)))
-		case "frozen_warning":
-			sb.WriteString(fmt.Sprintf("[%s] FROZEN_WARNING silence=%ds\n", ts, evt.SilenceSeconds))
-		case "heartbeat":
-			// Skip heartbeats to keep summary compact.
-		case "progress":
-			sb.WriteString(fmt.Sprintf("[%s] PROGRESS %s\n", ts, truncateStr(evt.Message, 80)))
-		default:
-			sb.WriteString(fmt.Sprintf("[%s] %s %s\n", ts, evt.Type, truncateStr(evt.Message, 80)))
-		}
+		formatTimelineEvent(&sb, &evt)
 	}
 	return sb.String()
+}
+
+// formatTimelineEvent writes a single event line to the string builder.
+func formatTimelineEvent(sb *strings.Builder, evt *traceEvent) {
+	ts := evt.Timestamp
+	if ts == "" {
+		ts = "?"
+	}
+
+	switch evt.Type {
+	case "dispatch_start":
+		sb.WriteString(fmt.Sprintf("[%s] START engine=%s model=%s\n", ts, evt.Engine, evt.Model))
+	case "dispatch_end":
+		sb.WriteString(fmt.Sprintf("[%s] END status=%s duration=%dms\n", ts, evt.Status, evt.DurationMS))
+	case "tool_start":
+		sb.WriteString(fmt.Sprintf("[%s] TOOL_START %s args=%s\n", ts, evt.Tool, truncateStr(evt.Args, 100)))
+	case "tool_end":
+		sb.WriteString(fmt.Sprintf("[%s] TOOL_END %s duration=%dms\n", ts, evt.Tool, evt.DurationMS))
+	case "file_read":
+		sb.WriteString(fmt.Sprintf("[%s] READ %s\n", ts, evt.Path))
+	case "file_write":
+		sb.WriteString(fmt.Sprintf("[%s] WRITE %s\n", ts, evt.Path))
+	case "command_run":
+		sb.WriteString(fmt.Sprintf("[%s] COMMAND %s\n", ts, truncateStr(evt.Command, 100)))
+	case "error":
+		sb.WriteString(fmt.Sprintf("[%s] ERROR code=%s msg=%s\n", ts, evt.ErrorCode, truncateStr(evt.Message, 100)))
+	case "frozen_warning":
+		sb.WriteString(fmt.Sprintf("[%s] FROZEN_WARNING silence=%ds\n", ts, evt.SilenceSeconds))
+	case "heartbeat":
+		// Skip heartbeats to keep summary compact.
+	case "progress":
+		sb.WriteString(fmt.Sprintf("[%s] PROGRESS %s\n", ts, truncateStr(evt.Message, 80)))
+	default:
+		sb.WriteString(fmt.Sprintf("[%s] %s %s\n", ts, evt.Type, truncateStr(evt.Message, 80)))
+	}
 }
 
 // dispatchTraceAnalyzer sends the trace to a Codex analyzer via agent-mux.
@@ -413,17 +468,20 @@ func mergeAnalyzerResult(verdict *TraceVerdict, analyzerResult map[string]any) {
 		verdict.Reasoning = reasoning
 	}
 
-	if firstAction, ok := analyzerResult["first_action"].(string); ok && verdict.FirstAction == "unknown" {
+	// LLM verdict always takes precedence for FirstAction when non-empty.
+	if firstAction, ok := analyzerResult["first_action"].(string); ok && firstAction != "" {
 		verdict.FirstAction = firstAction
 	}
 }
 
 // applyDeterministicFlags sets flags based on deterministic event analysis when the analyzer fails.
+// Exclusive groups: efficient/wasteful, error_spiral/clean_completion, good_first_attempt/poor_first_attempt.
+// When both would apply in an exclusive group, the negative flag wins (conservative).
 func applyDeterministicFlags(verdict *TraceVerdict, events []traceEvent) {
 	toolCount := 0
 	errorCount := 0
 	for _, evt := range events {
-		if evt.Type == "tool_start" || evt.Type == "tool_end" {
+		if evt.Type == "tool_start" {
 			toolCount++
 		}
 		if evt.Type == "error" {
@@ -431,18 +489,112 @@ func applyDeterministicFlags(verdict *TraceVerdict, events []traceEvent) {
 		}
 	}
 
-	if errorCount == 0 {
-		verdict.Flags = append(verdict.Flags, "clean_completion")
-	}
+	// error_spiral vs clean_completion — mutually exclusive, negative wins.
 	if errorCount > 3 {
 		verdict.Flags = append(verdict.Flags, "error_spiral")
+	} else if errorCount == 0 {
+		verdict.Flags = append(verdict.Flags, "clean_completion")
 	}
-	if toolCount <= 6 {
-		verdict.Flags = append(verdict.Flags, "efficient")
-	}
+
+	// wasteful vs efficient — mutually exclusive, negative wins.
 	if toolCount > 20 {
 		verdict.Flags = append(verdict.Flags, "wasteful")
+	} else if toolCount <= 6 {
+		verdict.Flags = append(verdict.Flags, "efficient")
 	}
+}
+
+// dispatchTraceAnalyzerRetry is a single retry of the analyzer with a longer timeout.
+func dispatchTraceAnalyzerRetry(binary string, caseName string, casePrompt string, timeline string, preVerdictData *TraceVerdict) (map[string]any, error) {
+	// Increase timeout_sec for the retry attempt.
+	return dispatchTraceAnalyzerWithTimeout(binary, caseName, casePrompt, timeline, preVerdictData, 120, 150*time.Second)
+}
+
+// dispatchTraceAnalyzerWithTimeout is like dispatchTraceAnalyzer but with configurable timeouts.
+func dispatchTraceAnalyzerWithTimeout(binary string, caseName string, casePrompt string, timeline string, preVerdictData *TraceVerdict, specTimeout int, ctxTimeout time.Duration) (map[string]any, error) {
+	analyzerPrompt := fmt.Sprintf(`You are evaluating an AI agent's behavior trace. The agent was given this task:
+%s
+
+Test case name: %s
+
+Pre-extracted metrics:
+- Turns used: %d
+- Tool calls: %d
+- Error count: %d
+- First action: %s
+- Duration: recorded by test harness
+
+Event timeline (from events.jsonl):
+%s
+
+Evaluate:
+1. First-attempt pattern: What did the agent try first? Was it the right approach?
+2. Error handling: When errors occurred, did the agent correct course or repeat mistakes?
+3. Completion quality: Did the agent accomplish the semantic intent?
+4. Efficiency: How many turns/tools relative to task complexity?
+
+Respond with ONLY valid JSON:
+{"pass": true/false, "flags": ["list", "of", "behavioral", "flags"], "reasoning": "1-2 sentence explanation", "first_action": "what agent did first"}
+
+Possible flags: "efficient", "wasteful", "good_first_attempt", "poor_first_attempt", "recovered_from_error", "error_spiral", "over_engineered", "under_delivered", "clean_completion"`,
+		casePrompt, caseName,
+		preVerdictData.TurnsUsed, preVerdictData.ToolCalls,
+		preVerdictData.ErrorCount, preVerdictData.FirstAction,
+		timeline)
+
+	artifactDir, err := os.MkdirTemp("", "axeval-trace-retry-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(artifactDir)
+
+	spec := map[string]any{
+		"engine":       "codex",
+		"model":        "gpt-5.4-mini",
+		"effort":       "high",
+		"prompt":       analyzerPrompt,
+		"cwd":          artifactDir,
+		"artifact_dir": artifactDir,
+		"skip_skills":  true,
+		"timeout_sec":  specTimeout,
+	}
+
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		return nil, fmt.Errorf("marshal spec: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), ctxTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binary, "--stdin", "--yes")
+	cmd.Stdin = bytes.NewReader(specJSON)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("analyzer retry dispatch: %w (stderr: %s)", err, stderr.String())
+	}
+
+	var dispatchResult map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &dispatchResult); err != nil {
+		return nil, fmt.Errorf("parse analyzer retry output: %w", err)
+	}
+
+	response, _ := dispatchResult["response"].(string)
+	if response == "" {
+		return nil, fmt.Errorf("analyzer retry returned empty response")
+	}
+
+	jsonStr := extractJSON(response)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		return nil, fmt.Errorf("parse analyzer retry verdict: %w (raw: %s)", err, truncateStr(response, 200))
+	}
+
+	return parsed, nil
 }
 
 // truncateStr truncates a string to maxLen with ellipsis.
@@ -455,6 +607,11 @@ func truncateStr(s string, maxLen int) string {
 
 // writeTraceReport writes trace verdicts to trace-report.json.
 func writeTraceReport(verdicts []TraceVerdict) error {
+	return writeTraceReportWithSkipped(verdicts, 0)
+}
+
+// writeTraceReportWithSkipped writes trace verdicts to trace-report.json, including skip count.
+func writeTraceReportWithSkipped(verdicts []TraceVerdict, skipped int) error {
 	dir := writeTraceReportDir()
 
 	if err := os.MkdirAll(dir, 0755); err != nil {
@@ -462,7 +619,8 @@ func writeTraceReport(verdicts []TraceVerdict) error {
 	}
 
 	summary := TraceSummary{
-		Total: len(verdicts),
+		Total:   len(verdicts) + skipped,
+		Skipped: skipped,
 	}
 	flagCounts := make(map[string]int)
 	for _, v := range verdicts {
@@ -489,18 +647,61 @@ func writeTraceReport(verdicts []TraceVerdict) error {
 		Summary:   summary,
 	}
 
+	// Run-over-run variance: diff against previous report if it exists.
+	path := filepath.Join(dir, "trace-report.json")
+	report.Diff = diffWithPreviousReport(path, verdicts)
+
 	data, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal trace report: %w", err)
 	}
 
-	path := filepath.Join(dir, "trace-report.json")
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		return fmt.Errorf("write trace report: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "ax-eval: trace report written to %s\n", path)
 	return nil
+}
+
+// diffWithPreviousReport compares current verdicts against a previous trace-report.json.
+func diffWithPreviousReport(reportPath string, verdicts []TraceVerdict) *TraceDiff {
+	prevData, err := os.ReadFile(reportPath)
+	if err != nil {
+		return nil // no previous report
+	}
+
+	var prevReport TraceReport
+	if err := json.Unmarshal(prevData, &prevReport); err != nil {
+		return nil
+	}
+
+	// Build lookup from previous verdicts by case name.
+	prevByCase := make(map[string]TraceVerdict, len(prevReport.Verdicts))
+	for _, v := range prevReport.Verdicts {
+		prevByCase[v.Case] = v
+	}
+
+	diff := &TraceDiff{}
+	for _, curr := range verdicts {
+		prev, found := prevByCase[curr.Case]
+		if !found {
+			continue // new case, nothing to compare
+		}
+		if prev.Pass && !curr.Pass {
+			diff.Regressions = append(diff.Regressions, fmt.Sprintf("%s: PASS->FAIL", curr.Case))
+		} else if !prev.Pass && curr.Pass {
+			diff.Improvements = append(diff.Improvements, fmt.Sprintf("%s: FAIL->PASS", curr.Case))
+		} else {
+			diff.Stable++
+		}
+	}
+
+	// Only include diff if there's something to report.
+	if len(diff.Regressions) == 0 && len(diff.Improvements) == 0 && diff.Stable == 0 {
+		return nil
+	}
+	return diff
 }
 
 // writeTraceReportDir returns the directory for trace reports.

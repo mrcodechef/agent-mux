@@ -103,7 +103,7 @@ func steerNudge(idPrefix, artifactDir string, rest []string, stdout io.Writer) i
 		message = strings.Join(rest, " ")
 	}
 
-	if err := inbox.WriteInbox(artifactDir, message); err != nil {
+	if err := inbox.WriteInbox(artifactDir, "[NUDGE] "+message); err != nil {
 		return emitSteerError(stdout, 1, "write_failed",
 			fmt.Sprintf("write inbox: %v", err), "")
 	}
@@ -124,7 +124,7 @@ func steerRedirect(idPrefix, artifactDir string, rest []string, stdout io.Writer
 	}
 
 	message := strings.Join(rest, " ")
-	if err := inbox.WriteInbox(artifactDir, message); err != nil {
+	if err := inbox.WriteInbox(artifactDir, "[REDIRECT] "+message); err != nil {
 		return emitSteerError(stdout, 1, "write_failed",
 			fmt.Sprintf("write inbox: %v", err), "")
 	}

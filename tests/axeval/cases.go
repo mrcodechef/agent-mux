@@ -41,6 +41,7 @@ var AllCases = func() []TestCase {
 			SkipSkills:   true,
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				func(r Result) Verdict {
 					path := filepath.Join(r.ArtifactDir, "hello.txt")
 					if _, err := os.Stat(path); err != nil {
@@ -69,7 +70,7 @@ var AllCases = func() []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			Evaluate:     statusIs("completed"),
+			Evaluate:     compose(statusIs("completed"), noErrorEvents()),
 			JudgePrompt:  "The worker should identify an off-by-one bug in the processNames function. The loop condition uses `i < len(names)-1` instead of `i < len(names)`, which skips the last element. Pass if the response mentions off-by-one, boundary error, or skipping the last element. The response should reference the processNames function or the for loop.",
 		},
 		{
@@ -86,6 +87,7 @@ var AllCases = func() []TestCase {
 			SkipSkills:   true,
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				responseContains("66"),
 			),
 		},
@@ -102,6 +104,7 @@ var AllCases = func() []TestCase {
 			SkipSkills:   true,
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				responseContains("42"),
 			),
 		},
@@ -120,6 +123,7 @@ var AllCases = func() []TestCase {
 			SkipSkills:   true,
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				func(r Result) Verdict {
 					// Check both artifact dir and cwd for the file.
 					for _, dir := range []string{r.ArtifactDir, cwd} {
@@ -146,7 +150,7 @@ var AllCases = func() []TestCase {
 			TimeoutSec:   120,
 			MaxWallClock: 3 * time.Minute,
 			SkipSkills:   true,
-			Evaluate:     statusIs("completed"),
+			Evaluate:     compose(statusIs("completed"), noErrorEvents()),
 			JudgePrompt:  "The worker should demonstrate it read both files and can compare them. It should mention: (1) both are utility/helper programs, (2) Go vs Python language differences, (3) specific functions from each file (processNames from main.go, format_table or truncate from helpers.py). Pass if at least 2 of these 3 points are addressed.",
 		},
 
@@ -261,6 +265,7 @@ var AllCases = func() []TestCase {
 			SkipSkills:   true,
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				func(r Result) Verdict {
 					// Check both artifact dir and cwd for the file.
 					for _, dir := range []string{r.ArtifactDir, cwd} {
@@ -292,6 +297,7 @@ var AllCases = func() []TestCase {
 			// No --stream flag: silent mode is the default.
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				// Silent mode suppresses heartbeat and tool_start from stderr.
 				stderrNotContains("heartbeat"),
 				stderrNotContains("tool_start"),
@@ -317,6 +323,7 @@ var AllCases = func() []TestCase {
 			// With --stream, all events pass through to stderr.
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				func(r Result) Verdict {
 					stderr := string(r.RawStderr)
 					// In streaming mode, at least heartbeat or tool_start should appear.
@@ -641,6 +648,7 @@ var AllCases = func() []TestCase {
 			ExtraFlags:   []string{"-R=scout"},
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				func(r Result) Verdict {
 					// Response should exist and be non-empty — the role resolved and dispatched.
 					if len(strings.TrimSpace(r.Response)) < 10 {
@@ -708,6 +716,7 @@ var AllCases = func() []TestCase {
 			SkipSkills:   true,
 			Evaluate: compose(
 				statusIs("completed"),
+				noErrorEvents(),
 				responseContains("4"),
 			),
 		},
