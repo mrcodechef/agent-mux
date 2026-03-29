@@ -689,5 +689,26 @@ var AllCases = func() []TestCase {
 					Reason: fmt.Sprintf("pipeline dispatch unexpected status=%q; error=%s", r.Status, r.ErrorMessage)}
 			},
 		},
+
+		// ── P1: Effort Tiers ────────────────────────────────────────────
+		// Note: skills-injection, recovery-redispatch, and context-file are
+		// standalone tests in p1_test.go because they require CLI-mode dispatch
+		// (not --stdin) or multi-step dispatch logic.
+		{
+			Name:         "effort-tiers-low",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "low",
+			Prompt:       "What is 2+2? Answer with just the number.",
+			CWD:          cwd,
+			TimeoutSec:   0, // let effort determine timeout
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			Evaluate: compose(
+				statusIs("completed"),
+				responseContains("4"),
+			),
+		},
 	}
 }()
