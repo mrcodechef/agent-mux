@@ -674,6 +674,11 @@ event_deny_action = "warn"   # "kill" (default) or "warn"
 | `agent-mux --stdin [flags]` | stdin dispatch |
 | `agent-mux --version` | version |
 | `agent-mux config [sub] [flags]` | config introspection |
+| `agent-mux list [flags]` | lifecycle: list dispatches |
+| `agent-mux status <id> [flags]` | lifecycle: dispatch status |
+| `agent-mux result <id> [flags]` | lifecycle: dispatch result |
+| `agent-mux inspect <id> [flags]` | lifecycle: deep dispatch view |
+| `agent-mux gc [flags]` | lifecycle: garbage collection |
 
 ### Config Subcommand
 
@@ -720,6 +725,75 @@ codex: gpt-5.4, gpt-5.4-mini, gpt-5.3-codex-spark
 Pass `--json` for a JSON object.
 
 Errors follow the standard lifecycle error envelope: `{"kind":"error","error":{...}}`.
+
+### Lifecycle Subcommands
+
+Post-dispatch introspection and garbage collection. All lifecycle subcommands output human-readable tables by default and structured JSON with `--json`. Errors follow the standard envelope: `{"kind":"error","error":{...}}`.
+
+**`agent-mux list`** — list recent dispatches.
+
+```
+agent-mux list [--limit N] [--status completed|failed|timed_out] [--engine codex|claude|gemini] [--json]
+```
+
+Default limit is 20 (0 = all). Output columns: ID (12-char prefix), SALT, STATUS, ENGINE, MODEL, DURATION, CWD. `--json` emits NDJSON (one record per line).
+
+Example — show last 5 failed Codex dispatches:
+```
+agent-mux list --limit 5 --status failed --engine codex
+```
+
+**`agent-mux status <dispatch_id>`** — show status for a single dispatch.
+
+```
+agent-mux status [--json] <dispatch_id>
+```
+
+Accepts full ID or unique prefix. Shows: Status, Engine/Model, Duration, Started, Truncated, Salt, ArtifactDir.
+
+Example:
+```
+agent-mux status 01JA
+```
+
+**`agent-mux result <dispatch_id>`** — retrieve dispatch response or artifact listing.
+
+```
+agent-mux result [--json] [--artifacts] <dispatch_id>
+```
+
+Accepts full ID or unique prefix. Default: prints stored result text. Falls back to `full_output.md` in the artifact directory for truncated/legacy dispatches. `--artifacts` lists files in the artifact directory instead.
+
+Example — list artifacts:
+```
+agent-mux result --artifacts 01JARQ8X
+```
+
+**`agent-mux inspect <dispatch_id>`** — deep view of a dispatch.
+
+```
+agent-mux inspect [--json] <dispatch_id>
+```
+
+Accepts full ID or unique prefix. Shows all record fields (ID, Status, Engine, Model, Role, Variant, Started, Ended, Duration, Truncated, Salt, Cwd, ArtifactDir), artifact listing, and full response text. JSON mode adds `meta` from `dispatch_meta.json` when present.
+
+Example:
+```
+agent-mux inspect 01JARQ8X
+```
+
+**`agent-mux gc --older-than <duration>`** — garbage-collect old dispatches.
+
+```
+agent-mux gc --older-than <duration> [--dry-run]
+```
+
+`--older-than` is required. Duration format: `Nd` (days) or `Nh` (hours). Cleans JSONL records, result files, and artifact directories. Records with unparseable timestamps are always kept.
+
+Example — dry run, dispatches older than 7 days:
+```
+agent-mux gc --older-than 7d --dry-run
+```
 
 ### --stdin JSON
 

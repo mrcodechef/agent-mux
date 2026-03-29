@@ -242,3 +242,108 @@ Config file loading order (later wins on conflicts):
   > --config path (explicit overlay — skips implicit lookup above)
   > coordinator companion .toml (if --profile is set)
 ```
+
+---
+
+## Lifecycle Subcommands
+
+Post-dispatch introspection and maintenance. All lifecycle subcommands emit structured JSON errors on failure (`{"kind":"error","error":{...}}`). Dispatch records are stored in the durable JSONL index at `~/.agent-mux/store/`.
+
+### `agent-mux list`
+
+List recent dispatches from the durable store.
+
+```
+agent-mux list [--limit N] [--status <filter>] [--engine <filter>] [--json]
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--limit` | int | `20` | Maximum records to print; `0` = all |
+| `--status` | string | unset | Filter by status: `completed`, `failed`, `timed_out` |
+| `--engine` | string | unset | Filter by engine: `codex`, `claude`, `gemini` |
+| `--json` | bool | `false` | Emit NDJSON (one JSON object per line) |
+
+No positional arguments accepted. Default output is a tabular table with columns: ID (truncated to 12 chars), SALT, STATUS, ENGINE, MODEL, DURATION, CWD (truncated to 48 chars). Records are shown in chronological order; `--limit` takes the last N.
+
+### `agent-mux status <dispatch_id>`
+
+Show status details for a single dispatch.
+
+```
+agent-mux status [--json] <dispatch_id>
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit full record as JSON |
+
+Accepts a full dispatch ID or a unique prefix. The prefix is validated via `sanitize.ValidateDispatchID`. Default output shows:
+
+| Field | Description |
+|-------|-------------|
+| Status | `completed`, `failed`, or `timed_out` |
+| Engine/Model | Combined `engine / model` display |
+| Duration | Formatted as `Nms` (< 1s) or `Ns` (>= 1s) |
+| Started | RFC3339 timestamp |
+| Truncated | `true` or `false` |
+| Salt | Human-readable dispatch salt |
+| ArtifactDir | Path to artifact directory |
+
+### `agent-mux result <dispatch_id>`
+
+Retrieve the response text or artifact listing for a dispatch.
+
+```
+agent-mux result [--json] [--artifacts] <dispatch_id>
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit JSON |
+| `--artifacts` | bool | `false` | List artifact directory contents instead of result text |
+
+Accepts a full dispatch ID or a unique prefix. When `--artifacts` is set, lists files in the artifact directory (resolved from the dispatch record or via `recovery.ResolveArtifactDir`). Without `--artifacts`, prints the stored result text. Falls back to reading `full_output.md` from the artifact directory when the primary result file is missing (covers truncated dispatches and legacy records).
+
+### `agent-mux inspect <dispatch_id>`
+
+Deep view of a dispatch: full record, response, artifacts, and dispatch metadata.
+
+```
+agent-mux inspect [--json] <dispatch_id>
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--json` | bool | `false` | Emit full inspection payload as JSON |
+
+Accepts a full dispatch ID or a unique prefix. The dispatch record must exist (no prefix-only fallback). Default output shows all record fields including Role, Variant, Started, Ended, Duration, Truncated, Salt, Cwd, and ArtifactDir. If artifacts exist, they are listed below the record. If a response is stored, it is printed under a `--- Response ---` separator.
+
+JSON mode emits a single object with keys: `dispatch_id`, `record`, `response`, `artifact_dir`, `artifacts`, and optionally `meta` (the `dispatch_meta.json` from the artifact directory, if present).
+
+### `agent-mux gc --older-than <duration>`
+
+Garbage-collect old dispatch records, result files, and artifact directories.
+
+```
+agent-mux gc --older-than <duration> [--dry-run]
+```
+
+| Flag | Type | Default | Notes |
+|------|------|---------|-------|
+| `--older-than` | string | **required** | Duration threshold; format: `Nd` (days) or `Nh` (hours). Examples: `7d`, `24h` |
+| `--dry-run` | bool | `false` | List what would be deleted without deleting |
+
+No positional arguments accepted. `--older-than` is required; omitting it is an error. Duration must be positive. Supported units: `d`/`D` (days), `h`/`H` (hours).
+
+Records with unparseable `started` timestamps are always kept (never deleted).
+
+**What gets cleaned:**
+- JSONL records from `~/.agent-mux/store/dispatches.jsonl`
+- Result files from `~/.agent-mux/store/results/<id>.md`
+- Artifact directories (the full `artifact_dir` path from each record)
+
+**Output (JSON):**
+- Normal: `{"kind":"gc","removed":N,"kept":N,"cutoff":"<RFC3339>"}`
+- Dry run: `{"kind":"gc_dry_run","would_remove":N,"dispatches":[{"id":"...","started":"...","engine":"...","status":"..."},...]}`
+- Nothing to clean: `{"kind":"gc","removed":0,"message":"No dispatches older than <dur> found."}`
