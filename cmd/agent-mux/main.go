@@ -1390,7 +1390,8 @@ func flagTakesValue(name string) bool {
 		"--add-dir",
 		"--limit",
 		"--status",
-		"--output", "-o":
+		"--output", "-o",
+		"--older-than":
 		return true
 	default:
 		return false
