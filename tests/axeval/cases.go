@@ -3,9 +3,11 @@
 package axeval
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -273,5 +275,113 @@ var AllCases = func() []TestCase {
 			),
 			JudgePrompt: "The worker should: (1) identify the off-by-one bug in processNames where the loop uses `i < len(names)-1` instead of `i < len(names)`, and (2) describe the fix. Pass if the response shows understanding of the bug and the fix is correct.",
 		},
+		// ── Streaming Protocol v2 ────────────────────────────────────
+		{
+			Name:         "silent-default",
+			Category:     CatStreaming,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "List the files in the current directory. Report filenames only.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			// No --stream flag: silent mode is the default.
+			Evaluate: compose(
+				statusIs("completed"),
+				// Silent mode suppresses heartbeat and tool_start from stderr.
+				stderrNotContains("heartbeat"),
+				stderrNotContains("tool_start"),
+				// Bookend events still pass through stderr in silent mode.
+				stderrContains("dispatch_start"),
+				// Event log (events.jsonl) captures tool events regardless of stream mode.
+				// (heartbeat check omitted: fast tasks may complete before the 15s heartbeat fires)
+				eventLogContains("tool_start"),
+			),
+		},
+		{
+			Name:         "stream-flag",
+			Category:     CatStreaming,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "List the files in the current directory. Report filenames only.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"--stream"},
+			// With --stream, all events pass through to stderr.
+			Evaluate: compose(
+				statusIs("completed"),
+				func(r Result) Verdict {
+					stderr := string(r.RawStderr)
+					// In streaming mode, at least heartbeat or tool_start should appear.
+					hasHeartbeat := strings.Contains(stderr, "heartbeat")
+					hasToolStart := strings.Contains(stderr, "tool_start")
+					if hasHeartbeat || hasToolStart {
+						return Verdict{Pass: true, Score: 1.0, Reason: "stderr contains streaming events (heartbeat or tool_start)"}
+					}
+					return Verdict{
+						Pass:   false,
+						Score:  0.0,
+						Reason: fmt.Sprintf("stderr missing streaming events; expected heartbeat or tool_start (stderr len=%d)", len(stderr)),
+					}
+				},
+			),
+		},
+		{
+			Name:         "async-dispatch",
+			Category:     CatStreaming,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "List the files in the current directory. Report filenames only.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 5 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"--async"},
+			IsAsync:      true,
+			EvalAsync: func(ack Result, collected Result) Verdict {
+				// Check 1: async ack has the right shape.
+				ackStr := string(ack.RawStdout)
+				if !strings.Contains(ackStr, `"kind":"async_started"`) {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: fmt.Sprintf("async ack missing kind=async_started; got: %s", ackStr)}
+				}
+				if !strings.Contains(ackStr, "dispatch_id") {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: "async ack missing dispatch_id"}
+				}
+				if !strings.Contains(ackStr, "salt") {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: "async ack missing salt"}
+				}
+
+				// Check 2: result collection succeeded.
+				if collected.Status == "parse_error" {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: fmt.Sprintf("result collection failed: %s", collected.ErrorMessage)}
+				}
+				if collected.ExitCode != 0 && collected.Status == "" {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: fmt.Sprintf("ax result exited with code %d; stdout: %s", collected.ExitCode, string(collected.RawStdout))}
+				}
+
+				return Verdict{Pass: true, Score: 1.0,
+					Reason: "async ack valid, result collected successfully"}
+			},
+		},
+		// TODO: steer-extend test case skipped. Testing extend requires dispatching
+		// a task with very short silence thresholds, then immediately steering extend
+		// from a concurrent goroutine, and verifying the watchdog doesn't kill at the
+		// original threshold. This is inherently timing-dependent and flaky in CI.
+		// The steering mechanism itself (control.json write + watchdog read) is unit-tested.
+		// A reliable integration test would need: (1) a freeze.sh variant that outputs
+		// periodic keepalives, (2) silence thresholds tuned to millisecond precision,
+		// (3) cross-goroutine coordination with the dispatch loop. Parking until we
+		// have a deterministic test harness for watchdog timing.
 	}
 }()

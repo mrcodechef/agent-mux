@@ -55,7 +55,9 @@ func dispatch(t *testing.T, binary string, tc TestCase) Result {
 	ctx, cancel := context.WithTimeout(context.Background(), wallClock)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binary, "--stdin", "--yes")
+	cmdArgs := []string{"--stdin", "--yes"}
+	cmdArgs = append(cmdArgs, tc.ExtraFlags...)
+	cmd := exec.CommandContext(ctx, binary, cmdArgs...)
 	cmd.Stdin = bytes.NewReader(specJSON)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -112,6 +114,76 @@ func dispatch(t *testing.T, binary string, tc TestCase) Result {
 	result.Events = parseEvents(artifactDir)
 
 	return result
+}
+
+// dispatchAsync runs agent-mux with --async and returns two Results:
+// 1. The async ack (from the initial --async dispatch stdout)
+// 2. The collected result (from `ax result <id>`)
+func dispatchAsync(t *testing.T, binary string, tc TestCase) (ack Result, collected Result) {
+	t.Helper()
+
+	// First dispatch with --async.
+	ack = dispatch(t, binary, tc)
+
+	// Parse the async_started ack to get the dispatch_id.
+	var ackJSON map[string]any
+	if err := json.Unmarshal(ack.RawStdout, &ackJSON); err != nil {
+		t.Logf("async ack not valid JSON: %s", string(ack.RawStdout))
+		return ack, Result{Status: "parse_error", ErrorMessage: "async ack not valid JSON"}
+	}
+
+	dispatchID, _ := ackJSON["dispatch_id"].(string)
+	if dispatchID == "" {
+		return ack, Result{Status: "parse_error", ErrorMessage: "no dispatch_id in async ack"}
+	}
+
+	// Run `ax result <id> --json` to collect the result.
+	wallClock := tc.MaxWallClock
+	if wallClock == 0 {
+		wallClock = 2 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), wallClock)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, binary, "result", dispatchID, "--json")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	start := time.Now()
+	runErr := cmd.Run()
+	duration := time.Since(start)
+
+	exitCode := 0
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = -1
+		}
+	}
+
+	collected = Result{
+		ArtifactDir: ack.ArtifactDir,
+		Duration:    duration,
+		ExitCode:    exitCode,
+		RawStdout:   stdout.Bytes(),
+		RawStderr:   stderr.Bytes(),
+	}
+
+	// Parse result JSON.
+	var raw map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &raw); err == nil {
+		if s, ok := raw["status"].(string); ok {
+			collected.Status = s
+		}
+		if r, ok := raw["response"].(string); ok {
+			collected.Response = r
+		}
+	}
+
+	collected.Events = parseEvents(ack.ArtifactDir)
+	return ack, collected
 }
 
 // parseEvents reads events.jsonl from the artifact dir and returns parsed events.

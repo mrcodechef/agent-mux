@@ -41,15 +41,23 @@ func TestAxEval(t *testing.T) {
 	for _, tc := range AllCases {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
-			// Liveness and events tests need controlled timing — no parallel.
-			if tc.Category != CatLiveness && tc.Category != CatEvents {
+			// Liveness, events, and streaming tests need controlled timing — no parallel.
+			if tc.Category != CatLiveness && tc.Category != CatEvents && tc.Category != CatStreaming {
 				t.Parallel()
 			}
 
-			result := dispatch(t, binaryPath, tc)
+			var result Result
+			var verdict Verdict
 
-			// Tier 1: deterministic evaluation.
-			verdict := tc.Evaluate(result)
+			if tc.IsAsync && tc.EvalAsync != nil {
+				ack, collected := dispatchAsync(t, binaryPath, tc)
+				result = ack // use ack for duration tracking
+				verdict = tc.EvalAsync(ack, collected)
+			} else {
+				result = dispatch(t, binaryPath, tc)
+				// Tier 1: deterministic evaluation.
+				verdict = tc.Evaluate(result)
+			}
 
 			// Record for report.
 			cr := CaseResult{

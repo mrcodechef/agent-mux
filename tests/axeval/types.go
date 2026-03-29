@@ -14,6 +14,7 @@ const (
 	CatLiveness    Category = "liveness"
 	CatError       Category = "error"
 	CatEvents      Category = "events"
+	CatStreaming   Category = "streaming"
 )
 
 // TestCase defines a single ax-eval behavioral test.
@@ -28,7 +29,10 @@ type TestCase struct {
 	TimeoutSec   int           // agent-mux --timeout value
 	MaxWallClock time.Duration // test-level context timeout
 	SkipSkills   bool
+	ExtraFlags   []string              // additional CLI flags (e.g. "--stream", "--async")
+	IsAsync      bool                  // true = use dispatchAsync flow (dispatch + result collection)
 	Evaluate     func(Result) Verdict  // deterministic check (always runs)
+	EvalAsync    func(ack Result, collected Result) Verdict // async-specific evaluator
 	JudgePrompt  string                // non-empty = run LLM-as-judge tier 2
 	EngineOpts   map[string]string     // e.g. silence thresholds for liveness
 }

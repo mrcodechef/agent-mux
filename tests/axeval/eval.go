@@ -97,6 +97,53 @@ func hasEventSequence(types ...string) func(Result) Verdict {
 	}
 }
 
+// stderrContains checks that Result.RawStderr contains substr.
+func stderrContains(substr string) func(Result) Verdict {
+	return func(r Result) Verdict {
+		if strings.Contains(string(r.RawStderr), substr) {
+			return Verdict{Pass: true, Score: 1.0, Reason: fmt.Sprintf("stderr contains %q", substr)}
+		}
+		return Verdict{
+			Pass:   false,
+			Score:  0.0,
+			Reason: fmt.Sprintf("stderr missing %q (len=%d)", substr, len(r.RawStderr)),
+		}
+	}
+}
+
+// stderrNotContains checks that Result.RawStderr does NOT contain substr.
+func stderrNotContains(substr string) func(Result) Verdict {
+	return func(r Result) Verdict {
+		if !strings.Contains(string(r.RawStderr), substr) {
+			return Verdict{Pass: true, Score: 1.0, Reason: fmt.Sprintf("stderr does not contain %q", substr)}
+		}
+		return Verdict{
+			Pass:   false,
+			Score:  0.0,
+			Reason: fmt.Sprintf("stderr unexpectedly contains %q", substr),
+		}
+	}
+}
+
+// eventLogContains checks that events.jsonl has an event of the given type.
+func eventLogContains(eventType string) func(Result) Verdict {
+	return hasEvent(eventType)
+}
+
+// stdoutContains checks that Result.RawStdout contains substr.
+func stdoutContains(substr string) func(Result) Verdict {
+	return func(r Result) Verdict {
+		if strings.Contains(string(r.RawStdout), substr) {
+			return Verdict{Pass: true, Score: 1.0, Reason: fmt.Sprintf("stdout contains %q", substr)}
+		}
+		return Verdict{
+			Pass:   false,
+			Score:  0.0,
+			Reason: fmt.Sprintf("stdout missing %q (len=%d)", substr, len(r.RawStdout)),
+		}
+	}
+}
+
 // compose ANDs multiple check functions. All must pass.
 func compose(checks ...func(Result) Verdict) func(Result) Verdict {
 	return func(r Result) Verdict {
