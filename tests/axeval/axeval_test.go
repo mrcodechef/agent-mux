@@ -41,15 +41,19 @@ func TestAxEval(t *testing.T) {
 	for _, tc := range AllCases {
 		tc := tc
 		t.Run(tc.Name, func(t *testing.T) {
-			// Liveness, events, and streaming tests need controlled timing — no parallel.
-			if tc.Category != CatLiveness && tc.Category != CatEvents && tc.Category != CatStreaming {
+			// Liveness, events, streaming, and steering tests need controlled timing — no parallel.
+			if tc.Category != CatLiveness && tc.Category != CatEvents && tc.Category != CatStreaming && tc.Category != CatSteering {
 				t.Parallel()
 			}
 
 			var result Result
 			var verdict Verdict
 
-			if tc.IsAsync && tc.EvalAsync != nil {
+			if tc.SteerSpec != nil && tc.EvalAsync != nil {
+				ack, _, collected := dispatchAsyncSteer(t, binaryPath, tc)
+				result = ack
+				verdict = tc.EvalAsync(ack, collected)
+			} else if tc.IsAsync && tc.EvalAsync != nil {
 				ack, collected := dispatchAsync(t, binaryPath, tc)
 				result = ack // use ack for duration tracking
 				verdict = tc.EvalAsync(ack, collected)

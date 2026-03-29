@@ -15,6 +15,7 @@ const (
 	CatError       Category = "error"
 	CatEvents      Category = "events"
 	CatStreaming   Category = "streaming"
+	CatSteering   Category = "steering"
 )
 
 // TestCase defines a single ax-eval behavioral test.
@@ -31,6 +32,7 @@ type TestCase struct {
 	SkipSkills   bool
 	ExtraFlags   []string              // additional CLI flags (e.g. "--stream", "--async")
 	IsAsync      bool                  // true = use dispatchAsync flow (dispatch + result collection)
+	SteerSpec    *SteerSpec            // non-nil = dispatch async, sleep, steer, then collect
 	Evaluate     func(Result) Verdict  // deterministic check (always runs)
 	EvalAsync    func(ack Result, collected Result) Verdict // async-specific evaluator
 	JudgePrompt  string                // non-empty = run LLM-as-judge tier 2
@@ -59,6 +61,13 @@ type Event struct {
 	SilenceSeconds int    `json:"silence_seconds,omitempty"`
 	Status         string `json:"status,omitempty"`
 	Timestamp      string `json:"ts,omitempty"`
+}
+
+// SteerSpec describes a mid-flight steering action to apply during an async dispatch.
+type SteerSpec struct {
+	DelayBeforeSteer time.Duration // how long to wait after dispatch before steering
+	Action           string        // "nudge", "abort", "redirect"
+	Message          string        // message argument for nudge/redirect
 }
 
 // Verdict is the outcome of evaluating a Result.
