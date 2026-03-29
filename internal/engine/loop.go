@@ -515,7 +515,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if err != nil {
 		return buildFailureResult(
 			spec, metadata, startTime, emitter,
-			"process_killed",
+			"startup_failed",
 			err.Error(),
 			"Check that the binary is installed and accessible.",
 		), nil
@@ -588,6 +588,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			mu.Unlock()
 			if silence >= silenceKill && setTerminal("failed") {
 				_ = emitter.EmitError("frozen_tool_call", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
+				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
 				_ = currentRun.proc.GracefulStop(5)
 				<-currentRun.streamDone
 				goto buildResult
@@ -870,7 +871,11 @@ func failureFromEventOrProcess(errEvt *types.HarnessEvent, exitCode int, stderr 
 			base = fmt.Sprintf("Exit code %d. stderr: %s", exitCode, tail)
 		}
 	}
-	return dispatch.NewDispatchError("process_killed", base, "Check engine logs.")
+	code := "process_killed"
+	if exitCode == 137 || exitCode == 143 {
+		code = "signal_killed"
+	}
+	return dispatch.NewDispatchError(code, base, "Check engine logs.")
 }
 
 func appendUnique(slice []string, item string) []string {

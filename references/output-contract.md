@@ -497,13 +497,16 @@ With `--verbose`, raw harness lines are also written to stderr prefixed with
 | `config_error` | Config loading or validation failure |
 | `engine_not_found` | Unknown engine name |
 | `event_denied` | Hook denied an event |
-| `frozen_tool_call` | Harness silence exceeded kill threshold |
+| `frozen_killed` | Harness killed after prolonged silence (frozen watchdog) |
+| `frozen_tool_call` | Harness silence exceeded warn threshold (event code) |
 | `interrupted` | Context cancelled / signal received |
 | `invalid_args` | Invalid arguments or missing required fields |
 | `max_depth_exceeded` | Recursive dispatch depth limit hit |
 | `model_not_found` | Unknown model for engine |
 | `output_parse_error` | Failed to parse harness output |
-| `process_killed` | Harness process was killed |
+| `process_killed` | Harness process killed (generic fallback) |
+| `signal_killed` | Harness killed by OS signal (exit 137/143) |
+| `startup_failed` | Harness binary failed to start |
 | `prompt_denied` | Hook denied the prompt |
 | `resume_session_missing` | No session ID available for resume |
 | `resume_start_failed` | Resume process failed to start |

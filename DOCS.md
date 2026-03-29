@@ -950,14 +950,18 @@ EventKind constants: `EventUnknown(0)`, `EventToolStart`, `EventToolEnd`, `Event
 
 ### Error Codes
 
-All 15 spec-defined error codes are implemented. Key codes:
+Error codes are implemented across the catalog. Key codes:
 
 | Code | Meaning | Retryable |
 |------|---------|-----------|
 | `engine_not_found` | Unknown engine name | No |
 | `model_not_found` | Unknown model (with fuzzy-match suggestions) | No |
 | `prompt_denied` | Hook deny pattern matched prompt | No |
-| `frozen_tool_call` | Silence kill threshold exceeded | Yes |
+| `startup_failed` | Harness binary failed to start | Yes |
+| `frozen_killed` | Killed after prolonged silence (frozen watchdog) | Yes |
+| `signal_killed` | Killed by OS signal — exit 137 (SIGKILL) or 143 (SIGTERM) | Yes |
+| `process_killed` | Generic process failure (catchall fallback) | Yes |
+| `frozen_tool_call` | Silence kill threshold exceeded (event code) | Yes |
 | `timed_out` | Hard timeout after grace period | Yes |
 | `interrupted` | `ctx.Done()` fired (SIGINT/SIGTERM) | No |
 | `cancelled` | TTY confirmation declined | No |

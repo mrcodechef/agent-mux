@@ -505,7 +505,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	result, err := dispatchSpec(ctx, spec, cfg, stderr, flags.verbose, hookEval)
 	if err != nil {
-		return emitFailureResult(stdout, spec, 1, "process_killed", err.Error(), "")
+		return emitFailureResult(stdout, spec, 1, "startup_failed", err.Error(), "")
 	}
 
 	emitResult(stdout, result)
@@ -1470,7 +1470,7 @@ func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseS
 		if err != nil {
 			return dispatch.BuildFailedResult(
 				spec,
-				dispatch.NewDispatchError("process_killed", err.Error(), ""),
+				dispatch.NewDispatchError("startup_failed", err.Error(), ""),
 				&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 				&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}, PipelineID: spec.PipelineID, ParentDispatchID: spec.ParentDispatchID},
 				0,
