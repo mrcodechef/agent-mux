@@ -30,7 +30,7 @@ Run ax-eval, all tiers.
 ```
 
 You:
-1. Read `skill/ax-eval/manifest.md`
+1. Read `ax-eval/MANIFEST.md`
 2. Run L0 through L3 sequentially
 3. Report per-scenario scores, per-tier averages, and overall AX Health
 
@@ -57,7 +57,7 @@ L4 tests require live dispatches. Run only when explicitly requested. Each scena
 
 ### 1. Read the manifest
 
-Read `skill/ax-eval/manifest.md`. This is the single source of truth for all scenarios, prompts, and checklists.
+Read `ax-eval/MANIFEST.md`. This is the single source of truth for all scenarios, prompts, and checklists.
 
 ### 2. Prepare materials per tier
 

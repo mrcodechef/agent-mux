@@ -1242,6 +1242,45 @@ func TestSoftSteerFIFOCleanupRemovesPipe(t *testing.T) {
 	}
 }
 
+func TestScanHarnessOutputBufferOverflow(t *testing.T) {
+	sa := newScriptedAdapter("exit 0")
+	eng := NewLoopEngine(sa, io.Discard, nil)
+
+	// Use a small buffer to trigger ErrTooLong without allocating megabytes.
+	// We override the scanner inside scanHarnessOutput by feeding a line longer
+	// than the 4MB limit through a pipe. Instead, we test the exported behaviour
+	// by writing an oversized line to a pipe and calling scanHarnessOutput.
+	pr, pw := io.Pipe()
+	signals := make(chan loopSignal, 16)
+	artifactDir := t.TempDir()
+
+	go func() {
+		// Write a single line that exceeds 4MB (the new buffer max).
+		oversized := strings.Repeat("x", 4*1024*1024+1)
+		_, _ = pw.Write([]byte(oversized + "\n"))
+		pw.Close()
+	}()
+
+	eng.scanHarnessOutput(pr, 1, artifactDir, signals)
+
+	// Drain signals and look for the ErrTooLong scan error.
+	found := false
+	for {
+		select {
+		case sig := <-signals:
+			if sig.kind == loopSignalScanError && strings.Contains(sig.err.Error(), "buffer limit") {
+				found = true
+			}
+		default:
+			goto done
+		}
+	}
+done:
+	if !found {
+		t.Error("expected a loopSignalScanError mentioning buffer limit for oversized output line")
+	}
+}
+
 func writeSoftSteerFIFO(t *testing.T, artifactDir, action, message string) {
 	t.Helper()
 

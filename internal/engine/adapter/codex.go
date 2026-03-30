@@ -10,6 +10,32 @@ import (
 
 type CodexAdapter struct{}
 
+var validCodexSandboxValues = map[string]bool{
+	"danger-full-access": true,
+	"workspace-write":    true,
+	"read-only":          true,
+}
+
+// ValidateCodexSandbox checks that the sandbox value in EngineOpts is one of the
+// values accepted by the Codex CLI. Call before BuildArgs to catch invalid values
+// early with a structured error instead of a silent Codex crash.
+func ValidateCodexSandbox(spec *types.DispatchSpec) (string, bool) {
+	permMode, _ := spec.EngineOpts["permission-mode"].(string)
+	if permMode != "" {
+		return "", true // permission-mode takes precedence; no sandbox to validate
+	}
+	sandbox := "danger-full-access"
+	if opts, ok := spec.EngineOpts["sandbox"]; ok {
+		if s, ok := opts.(string); ok && s != "" {
+			sandbox = s
+		}
+	}
+	if validCodexSandboxValues[sandbox] {
+		return "", true
+	}
+	return sandbox, false
+}
+
 type CodexSoftSteerEnvelope struct {
 	Action  string `json:"action"`
 	Message string `json:"message"`

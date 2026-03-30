@@ -383,3 +383,57 @@ func assertNotContains(t *testing.T, slice []string, want string) {
 		}
 	}
 }
+
+func TestValidateCodexSandboxAcceptsValidValues(t *testing.T) {
+	for _, val := range []string{"danger-full-access", "workspace-write", "read-only"} {
+		spec := &types.DispatchSpec{
+			Prompt:     "test",
+			EngineOpts: map[string]any{"sandbox": val},
+		}
+		badVal, ok := ValidateCodexSandbox(spec)
+		if !ok {
+			t.Errorf("ValidateCodexSandbox rejected valid value %q (returned %q)", val, badVal)
+		}
+	}
+}
+
+func TestValidateCodexSandboxRejectsInvalidValues(t *testing.T) {
+	for _, val := range []string{"none", "full-access", "write", "readOnly", "sandbox-off"} {
+		spec := &types.DispatchSpec{
+			Prompt:     "test",
+			EngineOpts: map[string]any{"sandbox": val},
+		}
+		badVal, ok := ValidateCodexSandbox(spec)
+		if ok {
+			t.Errorf("ValidateCodexSandbox accepted invalid value %q", val)
+		}
+		if badVal != val {
+			t.Errorf("ValidateCodexSandbox returned badVal=%q, want %q", badVal, val)
+		}
+	}
+}
+
+func TestValidateCodexSandboxSkipsWhenPermissionModeSet(t *testing.T) {
+	spec := &types.DispatchSpec{
+		Prompt: "test",
+		EngineOpts: map[string]any{
+			"permission-mode": "plan",
+			"sandbox":         "totally-invalid",
+		},
+	}
+	_, ok := ValidateCodexSandbox(spec)
+	if !ok {
+		t.Error("ValidateCodexSandbox should skip validation when permission-mode is set")
+	}
+}
+
+func TestValidateCodexSandboxDefaultIsValid(t *testing.T) {
+	spec := &types.DispatchSpec{
+		Prompt:     "test",
+		EngineOpts: map[string]any{},
+	}
+	_, ok := ValidateCodexSandbox(spec)
+	if !ok {
+		t.Error("ValidateCodexSandbox should accept default (no sandbox key)")
+	}
+}

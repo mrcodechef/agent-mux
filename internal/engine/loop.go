@@ -70,8 +70,9 @@ type softStdinBridge struct {
 }
 
 func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifactDir string, signals chan<- loopSignal) {
+	const scanBufMax = 4 * 1024 * 1024 // 4MB — large tool outputs (base64 images, grep on big dirs)
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 1024*1024), 1024*1024)
+	scanner.Buffer(make([]byte, 0, scanBufMax), scanBufMax)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if e.verbose {
@@ -96,7 +97,15 @@ func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifact
 		}
 	}
 	if err := scanner.Err(); err != nil && !isIgnorableStreamScanErr(err) {
-		signals <- loopSignal{kind: loopSignalScanError, runGen: runGen, err: err}
+		if errors.Is(err, bufio.ErrTooLong) {
+			signals <- loopSignal{
+				kind:   loopSignalScanError,
+				runGen: runGen,
+				err:    fmt.Errorf("harness output line exceeded %dMB buffer limit — a tool likely produced oversized output: %w", scanBufMax/(1024*1024), err),
+			}
+		} else {
+			signals <- loopSignal{kind: loopSignalScanError, runGen: runGen, err: err}
+		}
 	}
 }
 
@@ -166,6 +175,16 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 
 	_ = emitter.EmitDispatchStart(spec)
+	if _, ok := e.adapter.(*adapter.CodexAdapter); ok {
+		if badVal, valid := adapter.ValidateCodexSandbox(&dispatchSpec); !valid {
+			return buildFailureResult(
+				spec, metadata, startTime, emitter,
+				"invalid_args",
+				fmt.Sprintf("Invalid sandbox value %q for codex engine.", badVal),
+				"Valid sandbox values: danger-full-access, workspace-write, read-only. Example: agent-mux -e codex --sandbox workspace-write --cwd /repo \"<prompt>\".",
+			), nil
+		}
+	}
 	args := e.adapter.BuildArgs(&dispatchSpec)
 	binary := e.adapter.Binary()
 	if _, err := exec.LookPath(binary); err != nil {
