@@ -375,6 +375,11 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 }
 ```
 
+**Additional prompt instruction (prepend to common template):**
+```
+IMPORTANT: Do NOT investigate the environment or try to run any commands. Based solely on the error information provided, write a corrected command and list specific diagnostic steps the user should take. Your answer should be a written plan, not an execution.
+```
+
 **Checklist (4 items):**
 - [ ] Suggests verifying the engine binary (`gemini`) is installed and on PATH
 - [ ] Suggests a diagnostic step (not just blind retry)
@@ -398,6 +403,8 @@ You are a coordinator agent. You plan and dispatch agent-mux commands. Show exac
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 You have access to agent-mux. Here is the complete skill documentation:
 
 {skill/SKILL.md content}
@@ -432,6 +439,8 @@ Each step should use --async, wait for completion, and check the result before p
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 You have access to agent-mux. Here is the complete skill documentation:
 
 {skill/SKILL.md content}
@@ -468,6 +477,8 @@ Show the exact commands.
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 You have access to agent-mux. Here is the complete skill documentation:
 
 {skill/SKILL.md content}
@@ -505,6 +516,8 @@ Show the exact commands and decision logic.
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 You have access to agent-mux. Here is the complete skill documentation:
 
 {skill/SKILL.md content}
@@ -540,6 +553,8 @@ The dispatch ID is "01KMY3ABC".
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 You have access to agent-mux. Here is the complete skill documentation:
 
 {skill/SKILL.md content}
@@ -575,12 +590,14 @@ Tests whether GSD-Heavy and GSD-Light agents, given their actual system prompts 
 
 ### L3.1 — Heavy: novel problem requiring strategy
 
-**Materials:** GSD-Heavy agent prompt (external, provided by caller) + `skill/SKILL.md`. Skip if unavailable.
+**Materials:** GSD-Heavy agent prompt from `/Users/otonashi/thinking/pratchett-os/coordinator/.claude/agents/gsd-heavy.md` + `skill/SKILL.md`.
 
 **System prompt for dispatch:** The full GSD-Heavy agent definition (truncated to 8000 chars if needed).
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 A user says: "I need to reverse-engineer an undocumented API by analyzing network traffic logs, then generate a client SDK from the findings."
 
 You are GSD-Heavy. This is a novel problem with no clear pipeline.
@@ -610,12 +627,14 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 
 ### L3.2 — Light: known pipeline execution
 
-**Materials:** GSD-Light agent prompt (external, provided by caller) + `skill/SKILL.md`. Skip if unavailable.
+**Materials:** GSD-Light agent prompt from `/Users/otonashi/thinking/pratchett-os/coordinator/.claude/agents/gsd-light.md` + `skill/SKILL.md`.
 
 **System prompt for dispatch:** The full GSD-Light agent definition.
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 A user says: "Run the standard build pipeline: have an architect plan the changes to add retry logic to the HTTP client, then have a lifter implement it, then have an auditor verify it."
 
 You are GSD-Light. This is a known pipeline (plan -> implement -> verify).
@@ -642,12 +661,14 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 
 ### L3.3 — Heavy: dispatch with anticipated recovery
 
-**Materials:** GSD-Heavy prompt + `skill/SKILL.md`.
+**Materials:** GSD-Heavy agent prompt from `/Users/otonashi/thinking/pratchett-os/coordinator/.claude/agents/gsd-heavy.md` + `skill/SKILL.md`.
 
 **System prompt for dispatch:** The full GSD-Heavy agent definition (truncated to 8000 chars if needed).
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 A user says: "Migrate the database schema from v2 to v3. The migration involves 15 tables and typically takes the worker 20+ minutes, so timeouts are expected."
 
 You are GSD-Heavy. Plan how you would handle this with agent-mux, knowing workers will likely time out.
@@ -674,12 +695,14 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 
 ### L3.4 — Light: parallel fan-out execution
 
-**Materials:** GSD-Light prompt + `skill/SKILL.md`.
+**Materials:** GSD-Light agent prompt from `/Users/otonashi/thinking/pratchett-os/coordinator/.claude/agents/gsd-light.md` + `skill/SKILL.md`.
 
 **System prompt for dispatch:** The full GSD-Light agent definition.
 
 **Prompt to agent:**
 ```
+IMPORTANT: Do NOT execute any agent-mux commands. Your task is to SHOW the exact commands you would run, not to run them. Write a plan with exact CLI invocations. Do not attempt to discover available roles or configs by running commands — use only the documentation provided below.
+
 A user says: "Scan these 4 microservices for deprecated API usage: auth-service, user-service, billing-service, notification-service. All are in /home/user/services/<name>/."
 
 You are GSD-Light. Execute parallel scans using agent-mux.
