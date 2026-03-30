@@ -303,6 +303,16 @@ func configPaths(configPath string, cwd string) ([]string, error) {
 		}
 	}
 
+	// Absolutize cwd so that config discovery works regardless of
+	// whether --cwd was passed as a relative or absolute path.
+	if !filepath.IsAbs(cwd) {
+		abs, err := filepath.Abs(cwd)
+		if err != nil {
+			return nil, fmt.Errorf("resolve absolute cwd %q: %w", cwd, err)
+		}
+		cwd = abs
+	}
+
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("get home directory: %w", err)
