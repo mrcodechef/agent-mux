@@ -11,6 +11,107 @@ Replaces `FEATURES.md` (preserved at `_archive/FEATURES.md`).
 
 ## P0 — Next Up
 
+### B-5: Config path resolution bug (`--cwd` doesn't pick up fixture config) — FIXED
+**Type:** bug | **Priority:** P0 | **Status:** fixed — session `coordinator` (2026-03-30)
+**Decided:** `coordinator` (2026-03-30)
+
+`--cwd fixture/` doesn't pick up `.agent-mux/config.toml` from the fixture
+directory. Config path resolution is anchored to the process working directory
+rather than the `--cwd` value, so role/variant resolution silently falls back
+to defaults (or fails) whenever a dispatch uses `--cwd` with a fixture that
+has its own config.
+
+**Root cause (dual):** (1) `configPaths()` did not absolutize relative `--cwd`
+values before joining with `.agent-mux/config.toml`, so relative paths resolved
+against process CWD. (2) The ax-eval `testdata/fixture/` seed directory was
+missing the `.agent-mux/` config dir — `SetupFixtureDir()` copies testdata to a
+temp dir, so the config was never present in test runs.
+
+**Fix:** Absolutize cwd in `configPaths()` + copy `.agent-mux/` to `testdata/fixture/`.
+
+---
+
+### B-6: `host.pid` / `status.json` write-before-ack race — FIXED
+**Type:** bug | **Priority:** P0 | **Status:** fixed — session `coordinator` (2026-03-30)
+**Decided:** `coordinator` (2026-03-30)
+
+After `--async` emits its ack JSON to stdout, `host.pid` and `status.json`
+are not yet written to disk. Consumers that immediately check the filesystem
+after receiving the ack find nothing — no PID file, no status file.
+
+**Root cause:** Both `os.WriteFile` (host.pid) and `WriteStatusJSON` (atomic
+rename) did not fsync before proceeding. The write ordering was already correct
+(files before ack), but OS buffering meant consumers could see the ack before
+the files were durable on disk.
+
+**Fix:** Added explicit `f.Sync()` to both `WriteStatusJSON` and `writeAndSync`
+(new helper for host.pid). The ack is now guaranteed to follow durable writes.
+
+---
+
+### B-7: `result --json` missing terminal status field — FIXED
+**Type:** bug | **Priority:** P0 | **Status:** fixed — session `coordinator` (2026-03-30)
+**Decided:** `coordinator` (2026-03-30)
+
+`agent-mux result --json` output does not include a terminal status field
+indicating whether the dispatch completed successfully, failed, or was killed.
+Machine consumers (GSD agents, scripts) cannot distinguish outcomes without
+parsing free-form log text.
+
+**Fix:** Added `enrichResultStatus()` to both `runResultCommand` and `showResult`.
+Derives `"status"` from store record > dispatch meta > status.json (priority
+order). Adds `"kill_reason"` (frozen_killed, signal_killed, oom_killed,
+startup_failed) for failed dispatches by scanning events.jsonl. Removed the
+`t.Skip` workaround in `TestAsyncDispatchAndCollect`.
+
+---
+
+### S-4: 3 weak-assertion ax-eval cases
+**Type:** spec gap | **Priority:** P0 | **Status:** partially resolved
+**Decided:** `coordinator` (2026-03-30)
+
+Three ax-eval cases have inadequate assertions:
+
+1. **`variant-resolution`** — previously score 0.5, blocked by B-5 (config
+   path resolution). B-5 is now fixed — the fixture config is discoverable
+   from the temp test dir. Should score higher in the next ax-eval run.
+   Assertions still check stderr events for model confirmation; may need
+   hardening if `--stream` is not active during tests.
+
+2. **`handoff-summary-extraction`** — scored 1.0 in latest run (2026-03-30).
+   `handoff_summary` field is now present in the output contract and
+   correctly extracted. Likely resolved.
+
+3. **`response-truncation`** — explicitly skipped. Truncation is disabled by
+   design (see Parked section). Case should be updated to assert that
+   truncation does NOT occur, rather than being skipped entirely.
+
+**Target:** all three cases at score ≥ 0.7 after fixes.
+
+---
+
+### F-11: Codex soft stdin steering via named pipe
+**Type:** feature | **Priority:** P0 | **Status:** open — design documented
+**Design:** `references/streaming-protocol-v2.md` § "Codex Soft Stdin Steering"
+**Decided:** promoted P2 → P0, `coordinator` (2026-03-30)
+
+The F-6 stdin nudge (warn-threshold write) is implemented. The next layer is
+*soft steering*: sending structured prompts via stdin to redirect a Codex
+worker mid-flight without killing it — nudge, redirect, extend-scope, all as
+continuation input rather than process restart. Design doc covers the envelope
+format, tool-boundary-awareness (deferred delivery until active tool
+completes), and the state machine for steering vs. aborting.
+
+This is the clean steering path that avoids the kill+restart resume cycle.
+Promotion to P0 reflects that the kill+restart cycle is the dominant pain
+point in live GSD sessions.
+
+**Relation to F-6 / S-1:** F-6 is the plumbing (stdin pipe exists, nudge at
+warn threshold). F-11 is the protocol layer on top. S-1 (repeat escalation)
+would use F-11 as its delivery mechanism.
+
+---
+
 ### F-6: Soft steering via stdin before hard kill — SHIPPED
 **Type:** feature | **Priority:** P0 | **Status:** shipped — commit `2fd7fda`, session `acabe588`
 **Location:** `internal/engine/loop.go` (watchdog), adapters
@@ -113,6 +214,22 @@ test invocation, and expected pass/fail criteria.
 
 ## P2 — Planned
 
+### B-8: Pipeline result assembly returns empty response
+**Type:** bug | **Priority:** P2 | **Status:** open (experimental/deferred)
+**Decided:** `coordinator` (2026-03-30)
+
+Pipeline dispatches (`-P=name`) sometimes return an empty `response` in the
+final `PipelineResult`. Individual step workers complete successfully and
+produce output, but the pipeline result assembly fails to thread the final
+step's response into the top-level result. This appears to be a race in
+how step results are collected and merged.
+
+**Impact:** Low — pipelines are experimental and GSD-Heavy manually
+orchestrates rather than using the pipeline primitive. Deferred until pipeline
+usage justifies investigation.
+
+---
+
 ### F-3: Pipeline orchestration enhancements
 **Type:** feature | **Priority:** P2 | **Status:** open (core shipped in 3.0.0)
 **Location:** `internal/pipeline/`
@@ -171,25 +288,28 @@ F-6 (soft steering) — both touch the liveness system.
 
 ---
 
-### F-11: Codex soft stdin steering
-**Type:** feature | **Priority:** P2 | **Status:** open — design documented
-**Design:** `references/streaming-protocol-v2.md` § "Codex Soft Stdin Steering"
-**Decided:** `current` (2026-03-29)
+### F-12: `gc --dry-run` structured output
+**Type:** feature | **Priority:** P2 | **Status:** open
+**Decided:** `coordinator` (2026-03-30) — under discussion, may park if no real usage demand emerges.
 
-The F-6 stdin nudge (warn-threshold write) is implemented. The next layer is
-*soft steering*: sending structured prompts via stdin to redirect a Codex
-worker mid-flight without killing it — nudge, redirect, extend-scope, all as
-continuation input rather than process restart. Design doc covers the envelope
-format, tool-boundary-awareness (deferred delivery until active tool
-completes), and the state machine for steering vs. aborting.
-
-**Relation to F-6 / S-1:** F-6 is the plumbing (stdin pipe exists, nudge at
-warn threshold). F-11 is the protocol layer on top. S-1 (repeat escalation)
-would use F-11 as its delivery mechanism.
+`gc --dry-run` currently prints human-readable text. Machine consumers need
+structured JSON output (list of paths that would be deleted + size recovered)
+to build safe cleanup UIs or integrate with other tooling.
 
 ---
 
 ## P3 — Parked
+
+### L-1: `response_max_chars` / truncation
+**Type:** limitation | **Priority:** P3 | **Status:** parked — truncation removed by design
+**Decided:** `acabe588` (2026-03-29) — truncation deleted in commit `51dbb23`. `coordinator` (2026-03-30) — confirmed not a priority.
+
+Truncation is destructive and has been removed entirely. The `response_max_chars`
+config field and related truncation logic no longer exist in the codebase.
+The ax-eval `response-truncation` case (see S-4) should assert absence of
+truncation, not presence. No further work on truncation as a feature.
+
+---
 
 ### B-1: Gemini response capture broken
 **Type:** bug | **Priority:** P3 | **Status:** parked
@@ -288,3 +408,6 @@ All items include session ID where the work was done.
 | Fix: fixture git isolation | 3.2.0 | `current` | Test fixtures no longer leak git state between runs |
 | Design docs: soft stdin steering, pipeline gates, repeat escalation | 3.2.0 | `current` | `references/streaming-protocol-v2.md` extended with three future-design sections |
 | F-9: `--quiet` flag | 3.2.0 | `current` | Superseded — silent stderr is the new default |
+| B-5: config path resolution (`--cwd`) | 3.2.1 | `coordinator` | Absolutize cwd in configPaths + copy .agent-mux to testdata/fixture |
+| B-6: write-before-ack race | 3.2.1 | `coordinator` | Fsync host.pid + status.json before async ack emission |
+| B-7: `result --json` status field | 3.2.1 | `coordinator` | enrichResultStatus() + kill_reason from events.jsonl |
