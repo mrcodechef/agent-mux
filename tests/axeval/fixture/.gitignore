@@ -1,5 +1,6 @@
 # Artifacts created by ax-eval tests that workers write to the fixture CWD.
 # These must not be committed — they break `go build ./...` (redeclared symbols).
+fixed_main
 fixed_main.go
 analysis.md
 summary.md
@@ -7,5 +8,3 @@ comparison.md
 essay.md
 redirect_proof.txt
 hello.txt
-fixed_main.go
-fixed_main.go
