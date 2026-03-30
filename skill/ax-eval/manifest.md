@@ -4,7 +4,7 @@ Single source of truth for agent-mux agent experience testing. Add a test = add 
 
 ## How This Works
 
-The coordinator reads this manifest, dispatches agents with scenarios, evaluates their responses against checklists, and reports scores. No compiled test code. No separate judge dispatch. The coordinator IS the evaluator — it reads the response and checks each item.
+The evaluator reads this manifest, dispatches agents with scenarios, evaluates their responses against checklists, and reports scores. No compiled test code. No separate judge dispatch. The evaluator IS the judge — it reads the response and checks each item. Any agent with access to the agent-mux repo can run this.
 
 ## Evaluation Protocol
 
@@ -575,7 +575,7 @@ Tests whether GSD-Heavy and GSD-Light agents, given their actual system prompts 
 
 ### L3.1 — Heavy: novel problem requiring strategy
 
-**Materials:** GSD-Heavy prompt (`coordinator/.claude/agents/gsd-heavy.md`) + `skill/SKILL.md`.
+**Materials:** GSD-Heavy agent prompt (external, provided by caller) + `skill/SKILL.md`. Skip if unavailable.
 
 **System prompt for dispatch:** The full GSD-Heavy agent definition (truncated to 8000 chars if needed).
 
@@ -610,7 +610,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 
 ### L3.2 — Light: known pipeline execution
 
-**Materials:** GSD-Light prompt (`coordinator/.claude/agents/gsd-light.md`) + `skill/SKILL.md`.
+**Materials:** GSD-Light agent prompt (external, provided by caller) + `skill/SKILL.md`. Skip if unavailable.
 
 **System prompt for dispatch:** The full GSD-Light agent definition.
 

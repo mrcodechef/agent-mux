@@ -29,10 +29,10 @@ Runs agent-first evaluation of the agent-mux tool. Measures four capabilities:
 Run ax-eval, all tiers.
 ```
 
-The coordinator:
-1. Reads `skill/ax-eval/manifest.md`
-2. Runs L0 through L3 sequentially
-3. Reports per-scenario scores, per-tier averages, and overall AX Health
+You:
+1. Read `skill/ax-eval/manifest.md`
+2. Run L0 through L3 sequentially
+3. Report per-scenario scores, per-tier averages, and overall AX Health
 
 ### Single tier
 
@@ -79,11 +79,10 @@ Read `skill/ax-eval/manifest.md`. This is the single source of truth for all sce
 - Load `skill/SKILL.md`. This is injected into every L2 agent prompt as context.
 
 **L3 — GSD Comprehension:**
-- Load the GSD agent definitions:
-  - Heavy: `coordinator/.claude/agents/gsd-heavy.md`
-  - Light: `coordinator/.claude/agents/gsd-light.md`
+- Load the GSD agent definitions (provided by the caller or from a known path).
 - Load `skill/SKILL.md` for injection into agent prompts.
 - Use the GSD definition as the system prompt for the dispatched agent.
+- If GSD prompts are unavailable, skip L3 and note it in the report.
 
 ### 3. Dispatch agents
 
@@ -113,7 +112,7 @@ For each scenario:
 
 ### 4. Evaluate
 
-The coordinator IS the judge. For each scenario:
+You are the judge. For each scenario:
 
 1. Read the agent's response from the result JSON.
 2. Walk the checklist from the manifest. For each item:
@@ -173,7 +172,7 @@ Output an inline structured report:
 
 1. **The manifest is the single source of truth.** This skill tells you HOW to run; the manifest tells you WHAT to run. Add a test = add a section to the manifest. Edit a checklist = edit the manifest.
 
-2. **The coordinator evaluates directly.** No judge-as-dispatch. Read the response, check the checklist, score. This is simpler, gives better feedback, and avoids the meta-problem of testing whether the judge understands the criteria.
+2. **The evaluator evaluates directly.** No judge-as-dispatch. Read the response, check the checklist, score. This is simpler, gives better feedback, and avoids the meta-problem of testing whether the judge understands the criteria.
 
 3. **Prompts must be grounding.** Every scenario prompt includes enough material for the agent to produce a real answer. The L2/L3 failures in the Go test suite happened because agents lacked context. In this system, SKILL.md is always injected for L2/L3, and the full output-contract.md is always injected for L0.
 
