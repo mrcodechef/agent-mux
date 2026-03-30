@@ -3,12 +3,11 @@ name: agent-mux
 description: |
   Dispatch workers across Codex, Claude, and Gemini through one CLI and one
   JSON contract. Tool, not orchestrator — the LLM decides; agent-mux dispatches.
-  Use for: spawning workers, running pipelines, recovering timed-out dispatches,
-  async background dispatch, mid-flight steering, parsing output contracts,
-  and multi-model coordination.
-  Keywords: subagent, dispatch, worker, codex, claude, gemini, pipeline, role,
-  variant, recover, signal, agent-mux, spawn agent, engine, multi-model, async,
-  steer, wait, poll.
+  Use for: async dispatch, result collection, mid-flight steering, spawning
+  workers, running pipelines, recovering timed-out dispatches, parsing output
+  contracts, and multi-model coordination.
+  Keywords: async, dispatch, collect, steer, worker, codex, claude, gemini,
+  pipeline, role, variant, recover, signal, agent-mux, spawn agent, engine.
 ---
 
 # agent-mux
@@ -17,7 +16,7 @@ Dispatch substrate. One CLI, one JSON contract, three engines. TOML-driven
 roles encode engine + model + effort + timeout + skills into one flag. The
 calling LLM decides what to do — agent-mux handles the how.
 
-## 1. Design Principles
+## Design Principles
 
 These are load-bearing. They explain why things work the way they do.
 
@@ -34,57 +33,69 @@ suggestion, and retryability flag. Parse them programmatically, not as text.
 engine. Fan-out only happens through pipelines. Front-load context; don't
 make the worker discover its own scope.
 
-## 2. Quick Start
+## Quickstart
 
-Three patterns that cover 90% of dispatches.
-
-**Programmatic (--stdin)** — primary for coordinators:
+### Discovery
 ```bash
-printf '{"role":"lifter","prompt":"Fix the parser bug in src/parser.go:45","cwd":"/repo"}' | agent-mux --stdin
+agent-mux config roles        # role catalog: engines, models, timeouts, variants
+agent-mux config pipelines    # named multi-step workflows
 ```
 
-**Role shorthand** — when you know the role:
+### Dispatch -> Check -> Collect
+
+`--async` returns instantly. Read the ack, check progress, collect when done.
+
 ```bash
-agent-mux -R=lifter -C=/repo "Implement retries in src/http/client.ts"
+# DISPATCH — instant ack with dispatch_id
+agent-mux -R=scout --async -C=/repo "Find all deprecated API usages" 2>/dev/null
+# -> {"kind":"async_started","dispatch_id":"01KMY...","salt":"fair-elk-one","artifact_dir":"/tmp/agent-mux/01KMY..."}
+
+# CHECK — while the worker is running
+agent-mux inspect <id> 2>/dev/null           # metadata: role, engine, duration
+agent-mux steer <id> status 2>/dev/null      # liveness: running / orphaned / done
+
+# COLLECT — blocks until done, single clean JSON
+agent-mux result <id> --json 2>/dev/null
+# -> {"status":"completed","response":"...","activity":{"files_changed":[...]}}
 ```
 
-**Async dispatch** — fire and collect later:
+Result: check `status`, `response`, `response_truncated`, `activity.files_changed`.
+
+### Parallel dispatch
+
+Multiple `--async` in one Bash call — each returns its own ack:
 ```bash
-agent-mux -R=lifter --async -C=/repo "Long-running migration"
-# Returns immediately with dispatch_id
-agent-mux wait <dispatch_id>       # blocks until done
-agent-mux result <dispatch_id>     # retrieves response
+agent-mux -R=scout --async -C=/repo "Scan auth module" 2>/dev/null
+agent-mux -R=scout --async -C=/repo "Scan API layer" 2>/dev/null
+agent-mux -R=scout --async -C=/repo "Scan DB layer" 2>/dev/null
+```
+Collect each by ID: `agent-mux result <id> --json`.
+
+### Structured spec (when CLI flags aren't enough)
+```bash
+cat > /tmp/spec.json << 'EOF'
+{"role":"lifter","prompt":"...","cwd":"/repo","sandbox":"none","context_file":"/tmp/prior-analysis.md"}
+EOF
+agent-mux --stdin --async < /tmp/spec.json 2>/dev/null
 ```
 
-## 3. Dispatch Patterns
+**Codex workers:** Use `--sandbox none` for reliable file output. `workspace-write` has known persistence issues with multi-file writes.
 
-> "Which invocation shape fits my task?"
-
-**--stdin (primary)** — JSON from stdin. Use when: programmatic construction,
-multiple overrides, recovery context, or CLI flags become unreadable.
+### Steer mid-flight
 ```bash
-printf '{"role":"lifter","variant":"claude","skills":["react"],"prompt":"...","cwd":"/repo"}' | agent-mux --stdin
+agent-mux steer <id> redirect "Narrow to parser module only" 2>/dev/null
+agent-mux steer <id> nudge 2>/dev/null         # gentle reminder
+agent-mux steer <id> extend 300 2>/dev/null    # add 5 min
+agent-mux steer <id> abort 2>/dev/null          # kill
 ```
 
-**-R=role (shorthand)** — You know the role. The common interactive case.
+### Wait (block until completion)
 ```bash
-agent-mux -R=lifter -C=/repo "Implement retries in src/http/client.ts"
+agent-mux wait <id> --poll 60 2>/dev/null
 ```
+Poll interval: CLI `--poll` > config `[async].poll_interval` > 60s default.
 
-**Raw flags (escape hatch)** — No role fits.
-```bash
-agent-mux -E=codex -m=gpt-5.4 -e=high -C=/repo "one-off task"
-```
-
-**-P=pipeline** — Multi-step workflow defined in config TOML.
-```bash
-agent-mux -P=build -C=/repo "Redesign the auth flow"
-```
-See [references/pipeline-guide.md](references/pipeline-guide.md) for authoring.
-
-## 4. Engine Cognitive Styles
-
-> "Which engine for this task?"
+## Engine Cognitive Styles
 
 **Claude** resolves ambiguity. Planning, synthesis, review, prompt crafting.
 Roles: `architect`, `researcher`. Watch for: skipping validation, over-abstraction.
@@ -100,19 +111,37 @@ multiple files. Restrict scope with `--cwd` instead.
 second opinion or challenge probe. All variants are reasoning-only on this
 machine — no file reads, no tool calls. All context must be in the prompt.
 
-**Meta-rule:** If you're sending exploration to Codex or precision execution to
-Claude, reconsider.
-
 **Streaming v2:** stderr is silent by default — only bookend events
 (`dispatch_start`, `dispatch_end`) and failures are emitted. Use `--stream`
 to restore full event output for human debugging.
 
-**Known limitation:** Skill `scripts/` directories only reach Codex workers
-currently (Claude/Gemini adapters don't wire `addDirs`).
+**Meta-rule:** exploration -> Claude, precision -> Codex. Don't cross the streams.
 
-## 5. Role Quick-Reference
+## Dispatch Patterns
 
-> "Which role matches this task?"
+1. **`-R=role`** — CLI shorthand, most common for simple dispatches.
+   ```bash
+   agent-mux -R=lifter --async -C=/repo "Implement retries in client.ts"
+   ```
+
+2. **`--stdin` JSON** — structured specs with multiple overrides, recovery
+   context, programmatic construction.
+   ```bash
+   printf '{"role":"lifter","prompt":"...","cwd":"/repo"}' | agent-mux --stdin --async
+   ```
+
+3. **Raw flags** (`-E= -m=`) — escape hatch when no role fits.
+   ```bash
+   agent-mux -E=codex -m=gpt-5.4 -e=high --async -C=/repo "one-off task"
+   ```
+
+4. **`-P=pipeline`** — multi-step workflows defined in TOML config.
+   ```bash
+   agent-mux -P=build -C=/repo "Redesign the auth flow"
+   ```
+   See [references/pipeline-guide.md](references/pipeline-guide.md) for authoring.
+
+## Role Quick-Reference
 
 **Scanning:** `scout` (fast, mini) | `explorer` (deep, multi-file, KB-aware)
 **Implementation:** `lifter` (standard) | `lifter-deep` (xhigh, hard problems)
@@ -127,42 +156,7 @@ Variants swap the engine within a role: `-R=lifter --variant=claude`. Common
 variants: `claude`, `gemini`, `mini`, `spark`. Run `agent-mux config roles`
 for the live catalog with all engines, models, timeouts, and variants.
 
-## 6. Async Dispatch
-
-> "I need to fire a dispatch and collect the result later."
-
-**Start async:**
-```bash
-agent-mux -R=lifter --async -C=/repo "Long task"
-```
-Returns `async_started` JSON immediately with `dispatch_id` and `artifact_dir`.
-
-**Collect results:**
-```bash
-agent-mux wait <id>                  # block until terminal state, print DispatchResult
-agent-mux wait <id> --poll 5s        # custom poll interval
-agent-mux result <id>                # get response (blocks by default)
-agent-mux result <id> --no-wait      # error if still running
-agent-mux result <id> --artifacts    # list artifact files
-```
-
-**Mid-flight steering:**
-```bash
-agent-mux steer <id> status          # read live status from status.json
-agent-mux steer <id> abort           # SIGTERM the worker
-agent-mux steer <id> nudge           # ask worker to wrap up
-agent-mux steer <id> redirect "new instructions here"
-agent-mux steer <id> extend 300      # extend watchdog kill threshold
-```
-
-**Poll interval precedence:** CLI `--poll` > config.toml `[async].poll_interval` > 60s default.
-
-**Signal (legacy):** `agent-mux --signal=<id> "message"` delivers to inbox.
-Ack confirms write, not delivery. Keep signals to one crisp sentence.
-
-## 7. Output Parsing
-
-> "What do I check in the response?"
+## Output Parsing
 
 **Single dispatch** — 4 fields to check:
 - `status`: `completed` | `timed_out` | `failed`. Never treat non-completed as done.
@@ -175,12 +169,11 @@ Ack confirms write, not delivery. Keep signals to one crisp sentence.
 - `steps[]`: Per-step worker results with `summary` and `artifact_dir`
 - `final_step`: The last step's output
 
-Always parse JSON from stdout. Never parse as text. For full schemas:
+Always parse JSON from stdout. Never parse as text. `result --json` gives
+clean single JSON. For full schemas:
 [references/output-contract.md](references/output-contract.md).
 
-## 8. Failure & Recovery
-
-> "The dispatch failed or timed out. What now?"
+## Failure & Recovery
 
 ```
 status?
@@ -202,9 +195,7 @@ status?
 For recovery mechanics, signal delivery, artifact layout, and liveness
 watchdog details: [references/recovery-guide.md](references/recovery-guide.md).
 
-## 9. Codex Prompt Discipline
-
-> "How do I get clean output from Codex?"
+## Codex Prompt Discipline
 
 Codex output quality is a direct function of prompt specificity. Rules:
 
@@ -220,9 +211,7 @@ BAD: `"Read all files in src/auth/ and identify issues"`
 GOOD: `"In src/auth/middleware.go:45-80, validateToken() doesn't handle expired
 refresh tokens. Add a check at line 67. refreshToken is at src/auth/refresh.go:12-30."`
 
-## 10. Timeout Alignment
-
-> "My wrapper kills the process before agent-mux can clean up."
+## Timeout Alignment
 
 Wrapper timeout MUST exceed agent-mux timeout by at least 60 seconds.
 
@@ -235,26 +224,18 @@ Wrapper timeout MUST exceed agent-mux timeout by at least 60 seconds.
 
 Roles set their own timeouts. Check with `agent-mux config roles`.
 
-## 11. Anti-Patterns
+## Anti-Patterns
 
 - **Raw engine/model/effort when a role fits.** Roles exist. Use them.
-- **`--permission-mode` with Codex.** Use `--sandbox` instead.
 - **Exploration prompts to Codex.** Use Claude for open-ended work.
+- **Codex with `workspace-write` sandbox for multi-file output.** Use
+  `--sandbox none` + `--cwd` for scope control instead.
 - **Wrapper timeout == worker timeout.** Add 60s slack.
 - **Ignoring `status` field.** `timed_out` is not `completed`.
 - **Pipeline output parsed as DispatchResult.** Different JSON shape.
-- **Codex with `workspace-write` sandbox for multi-file output.** Use
-  `--sandbox none` + `--cwd` for scope control instead.
-- **Cross-CWD skill resolution failure.** When dispatching with `--cwd`
-  pointing to a different project, skills search: cwd, configDir, then
-  `[skills] search_paths`. Fix: add missing paths to `search_paths` in
-  config.toml, or use `--skip-skills` as escape hatch.
-  Run `agent-mux config skills` to verify discoverability.
-- **Using `-V` for `--version`.** `-V` no longer exists. Use `--version`.
+- **Synchronous dispatch from Claude Code coordinators.** Use `--async`.
 
-## 12. Reference Index
-
-> "Where do I go for deeper detail?"
+## Reference Index
 
 **Operational references** (skill/references/):
 
