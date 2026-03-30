@@ -209,6 +209,18 @@ Overlay is **union-merged** with the base list (appended and deduplicated). Exis
 | `warn` | []string | nil | Patterns that trigger warning |
 | `event_deny_action` | string | `""` | Action on deny match in events: `"kill"` or `"warn"` (empty string = kill behavior) |
 
+#### `[async]` -- AsyncConfig
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `poll_interval` | string (Go duration) | `""` (60s hardcoded default) | Poll interval for `agent-mux wait`. Overridden by `--poll` CLI flag |
+
+Example:
+```toml
+[async]
+poll_interval = "60s"
+```
+
 #### `[skills]` -- SkillsConfig
 
 | Key | Type | Default | Purpose |
@@ -285,6 +297,7 @@ func merge[T comparable](dst *T, value T, defined bool) {
 | `[liveness]` / `[timeout]` scalars | Last file with explicit definition wins |
 | `[hooks].deny` / `.warn` | Overlay list union-merged with base (appended + deduplicated) |
 | `[skills].search_paths` | Overlay list union-merged with base (appended + deduplicated) |
+| `[async]` scalars | Last file with explicit definition wins |
 
 ### Profile Loading
 
@@ -817,7 +830,9 @@ agent-mux gc --older-than 7d --dry-run
 
 The worker runs in the current process with stdout/stderr redirected to `/dev/null`. Use `ax wait` or `ax result` to collect output.
 
-**`agent-mux wait <dispatch_id> [--poll <duration>]`** — block until an async dispatch completes. Reads `status.json` until state is terminal. Optional `--poll` sets check interval (default: `2s`). Prints the final `DispatchResult` JSON to stdout on completion.
+**`agent-mux wait <dispatch_id> [--poll <duration>] [--config <path>] [--cwd <dir>]`** — block until an async dispatch completes. Reads `status.json` until state is terminal. Optional `--poll` sets check interval (default: `60s`). Prints the final `DispatchResult` JSON to stdout on completion.
+
+Poll interval precedence: CLI `--poll` flag > `[async].poll_interval` in config.toml > hardcoded default (`60s`).
 
 Example:
 ```
