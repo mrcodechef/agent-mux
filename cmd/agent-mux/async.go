@@ -36,8 +36,9 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, cfg *config
 	}
 
 	// Write host.pid so ax status can detect orphaned dispatches.
+	// Fsync to guarantee on-disk visibility before the async ack is emitted.
 	pidPath := filepath.Join(spec.ArtifactDir, "host.pid")
-	if err := os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
+	if err := writeAndSync(pidPath, []byte(fmt.Sprintf("%d", os.Getpid()))); err != nil {
 		return emitFailureResult(stdout, spec, 1, "artifact_dir_unwritable",
 			fmt.Sprintf("Write host.pid in %q: %v", spec.ArtifactDir, err),
 			"Ensure the artifact directory is writable.")
@@ -45,6 +46,7 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, cfg *config
 	defer os.Remove(pidPath)
 
 	// Write initial status.json so ax status returns immediately.
+	// WriteStatusJSON fsyncs internally before rename.
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 		State:        "running",
 		ElapsedS:     0,
@@ -54,7 +56,9 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, cfg *config
 		DispatchID:   spec.DispatchID,
 	})
 
-	// Emit async_started ack to stdout.
+	// Emit async_started ack to stdout AFTER both files are on disk.
+	// The ack is the last thing written — consumers can safely read
+	// host.pid and status.json immediately after receiving it.
 	writeCompactJSON(stdout, map[string]any{
 		"schema_version": 1,
 		"kind":           "async_started",
@@ -105,4 +109,22 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, cfg *config
 	})
 
 	return 0
+}
+
+// writeAndSync writes data to path with an explicit fsync to guarantee
+// the content is durable on disk before the caller proceeds.
+func writeAndSync(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

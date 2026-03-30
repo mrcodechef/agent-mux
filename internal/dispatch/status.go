@@ -26,6 +26,8 @@ type LiveStatus struct {
 const statusFileName = "status.json"
 
 // WriteStatusJSON atomically writes status.json to the artifact directory.
+// The file is fsynced before rename to guarantee on-disk visibility for
+// consumers that read immediately after an async ack.
 func WriteStatusJSON(artifactDir string, status LiveStatus) error {
 	if strings.TrimSpace(artifactDir) == "" {
 		return nil
@@ -39,9 +41,26 @@ func WriteStatusJSON(artifactDir string, status LiveStatus) error {
 
 	path := filepath.Join(artifactDir, statusFileName)
 	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+
+	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return fmt.Errorf("open status temp: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
 		return fmt.Errorf("write status temp: %w", err)
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("sync status temp: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return fmt.Errorf("close status temp: %w", err)
+	}
+
 	if err := os.Rename(tmpPath, path); err != nil {
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("rename status temp: %w", err)
