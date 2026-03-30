@@ -121,7 +121,9 @@ func TestDispatchResultFailed(t *testing.T) {
 		Error: &DispatchError{
 			Code:       "model_not_found",
 			Message:    "Model 'gpt-99' not found.",
-			Suggestion: "Did you mean 'gpt-5.4'?",
+			Suggestion: "The selected model is not available for the current engine. Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
+			Hint:       "The selected model is not available for the current engine.",
+			Example:    "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
 			Retryable:  true,
 		},
 		Activity:   &DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
@@ -153,6 +155,15 @@ func TestDispatchResultFailed(t *testing.T) {
 	}
 	if !decoded.Error.Retryable {
 		t.Error("error.retryable should be true")
+	}
+	if decoded.Error.Hint != "The selected model is not available for the current engine." {
+		t.Errorf("error.hint = %q", decoded.Error.Hint)
+	}
+	if decoded.Error.Example != "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\"." {
+		t.Errorf("error.example = %q", decoded.Error.Example)
+	}
+	if decoded.Error.Suggestion != "The selected model is not available for the current engine. Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\"." {
+		t.Errorf("error.suggestion = %q", decoded.Error.Suggestion)
 	}
 }
 

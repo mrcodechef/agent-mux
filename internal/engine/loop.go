@@ -766,7 +766,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			if cf := readControlFile(spec.ArtifactDir); cf != nil {
 				if cf.Abort && setTerminal("failed") {
 					_ = emitter.EmitError("abort_requested", "Abort requested via control file.")
-					dispatchErr = dispatch.NewDispatchError("interrupted", "Abort requested via ax steer abort.", "")
+					dispatchErr = dispatch.NewDispatchError("abort_requested", "Abort requested via ax steer abort.", "")
 					_ = currentRun.proc.GracefulStop(5)
 					<-currentRun.streamDone
 					goto buildResult
@@ -802,7 +802,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			// Atomic status.json write for pull-based status.
 			_ = writeRunningStatus(spec.ArtifactDir, spec.DispatchID, startTime, statusActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
 			if silence >= effectiveKill && setTerminal("failed") {
-				_ = emitter.EmitError("frozen_tool_call", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
+				_ = emitter.EmitError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
 				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
 				_ = currentRun.proc.GracefulStop(5)
 				<-currentRun.streamDone

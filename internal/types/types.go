@@ -39,7 +39,9 @@ type DispatchResult struct {
 type DispatchError struct {
 	Code             string   `json:"code"`
 	Message          string   `json:"message"`
-	Suggestion       string   `json:"suggestion"`
+	Suggestion       string   `json:"suggestion"` // backward compat: Hint + " " + Example, trimmed
+	Hint             string   `json:"hint"`
+	Example          string   `json:"example"`
 	Retryable        bool     `json:"retryable"`
 	PartialArtifacts []string `json:"partial_artifacts,omitempty"`
 }

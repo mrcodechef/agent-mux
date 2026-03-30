@@ -493,26 +493,30 @@ With `--verbose`, raw harness lines are also written to stderr prefixed with
 
 | Code | Meaning |
 |------|---------|
+| `abort_requested` | Dispatch aborted via `ax steer abort` or control file |
 | `artifact_dir_unwritable` | Cannot create/write artifact directory |
 | `binary_not_found` | Harness binary not found on PATH |
+| `cancelled` | Dispatch cancelled before launch at confirmation |
 | `config_error` | Config loading or validation failure |
 | `engine_not_found` | Unknown engine name |
-| `event_denied` | Hook denied an event |
-| `frozen_killed` | Harness killed after prolonged silence (frozen watchdog) |
-| `frozen_tool_call` | Harness silence exceeded warn threshold (event code) |
-| `stdin_nudge` | Stdin nudge sent to frozen process (info event, not error) |
-| `interrupted` | Context cancelled / signal received |
+| `event_denied` | Hook denied a harness event |
+| `frozen_killed` | Harness killed after prolonged silence |
+| `internal_error` | agent-mux hit an internal invariant failure |
+| `interrupted` | Context cancelled or signal received |
 | `invalid_args` | Invalid arguments or missing required fields |
+| `invalid_input` | Input failed validation |
 | `max_depth_exceeded` | Recursive dispatch depth limit hit |
 | `model_not_found` | Unknown model for engine |
-| `output_parse_error` | Failed to parse harness output |
+| `output_parse_error` | Failed to parse streaming harness output |
+| `parse_error` | Malformed final harness output prevented a trusted result |
 | `process_killed` | Harness process killed (generic fallback) |
-| `signal_killed` | Harness killed by OS signal (exit 137/143) |
-| `startup_failed` | Harness binary failed to start |
-| `prompt_denied` | Hook denied the prompt |
+| `prompt_denied` | Hook denied the prompt before launch |
+| `recovery_failed` | Existing dispatch state could not be recovered |
 | `resume_session_missing` | No session ID available for resume |
 | `resume_start_failed` | Resume process failed to start |
 | `resume_unsupported` | Engine does not support resume |
+| `signal_killed` | Harness killed by OS signal (exit 137/143) |
+| `startup_failed` | Harness binary failed to start |
 
 ### Harness-Native Codes
 
@@ -522,4 +526,4 @@ Additional codes surface directly from the underlying harness:
 - Claude: `result_error`
 - Gemini: `tool_error`
 
-Treat `error.suggestion` as best-effort guidance, not a closed enum.
+Treat `error.suggestion` as backward-compatible guidance derived from `error.hint` and `error.example`.

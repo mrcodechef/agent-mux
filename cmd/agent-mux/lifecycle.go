@@ -611,9 +611,9 @@ func runGCCommand(args []string, stdout io.Writer) int {
 
 	if dryRun {
 		writeCompactJSON(stdout, map[string]any{
-			"kind":      "gc_dry_run",
+			"kind":         "gc_dry_run",
 			"would_remove": len(remove),
-			"dispatches": gcRecordSummaries(remove),
+			"dispatches":   gcRecordSummaries(remove),
 		})
 		return 0
 	}
@@ -928,7 +928,6 @@ func extractKillReason(artifactDir string) string {
 		"frozen_killed":  true,
 		"signal_killed":  true,
 		"startup_failed": true,
-		"oom_killed":     true,
 	}
 
 	scanner := bufio.NewScanner(f)
@@ -955,4 +954,3 @@ func extractKillReason(artifactDir string) string {
 	}
 	return ""
 }
-

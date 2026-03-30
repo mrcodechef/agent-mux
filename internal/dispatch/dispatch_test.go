@@ -214,7 +214,6 @@ func TestFuzzyMatchModel(t *testing.T) {
 }
 
 func TestNewDispatchError(t *testing.T) {
-	// Known error code
 	err := NewDispatchError("model_not_found", "Model 'gpt-99' not found.", "Did you mean 'gpt-5.4'?")
 	if err.Code != "model_not_found" {
 		t.Errorf("code = %q, want model_not_found", err.Code)
@@ -222,17 +221,37 @@ func TestNewDispatchError(t *testing.T) {
 	if !err.Retryable {
 		t.Error("model_not_found should be retryable")
 	}
+	if err.Hint != "Did you mean 'gpt-5.4'?" {
+		t.Errorf("hint = %q", err.Hint)
+	}
+	if err.Example != "" {
+		t.Errorf("example = %q, want empty for override path", err.Example)
+	}
 	if err.Suggestion != "Did you mean 'gpt-5.4'?" {
 		t.Errorf("suggestion = %q", err.Suggestion)
 	}
 
-	// Unknown error code
+	err = NewDispatchError("frozen_killed", "", "")
+	if err.Message != "Worker killed after prolonged silence." {
+		t.Errorf("message = %q", err.Message)
+	}
+	if err.Hint == "" || err.Example == "" {
+		t.Fatalf("catalog-backed hint/example should both be populated: %+v", err)
+	}
+	wantSuggestion := strings.TrimSpace(err.Hint + " " + err.Example)
+	if err.Suggestion != wantSuggestion {
+		t.Errorf("suggestion = %q, want %q", err.Suggestion, wantSuggestion)
+	}
+
 	err = NewDispatchError("unknown_error", "Something broke", "Try again")
 	if err.Code != "unknown_error" {
 		t.Errorf("code = %q, want unknown_error", err.Code)
 	}
 	if err.Retryable {
 		t.Error("unknown error should not be retryable by default")
+	}
+	if err.Hint != "Try again" || err.Example != "" || err.Suggestion != "Try again" {
+		t.Errorf("unknown override path = %+v", err)
 	}
 }
 

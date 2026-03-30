@@ -157,24 +157,41 @@ Pass `--json` for machine-parseable output. Default is tabular.
 
 ## Error Codes
 
+### Built-in Codes
+
 | Code | Meaning |
 |------|---------|
+| `abort_requested` | Dispatch aborted via `ax steer abort` or control file |
 | `artifact_dir_unwritable` | Cannot create/write artifact directory |
-| `binary_not_found` | Harness binary not on PATH |
+| `binary_not_found` | Harness binary not found on PATH |
+| `cancelled` | Dispatch cancelled before launch at confirmation |
 | `config_error` | Config loading or validation failure |
 | `engine_not_found` | Unknown engine name |
-| `event_denied` | Hook denied an event |
-| `frozen_killed` | Killed after prolonged silence |
-| `invalid_args` | Invalid arguments or missing fields |
+| `event_denied` | Hook denied a harness event |
+| `frozen_killed` | Harness killed after prolonged silence |
+| `internal_error` | agent-mux hit an internal invariant failure |
+| `interrupted` | Context cancelled or signal received |
+| `invalid_args` | Invalid arguments or missing required fields |
+| `invalid_input` | Input failed validation |
 | `max_depth_exceeded` | Recursive dispatch depth limit hit |
 | `model_not_found` | Unknown model for engine |
-| `output_parse_error` | Failed to parse harness output |
-| `process_killed` | Harness killed (generic) |
-| `signal_killed` | Killed by OS signal (exit 137/143) |
-| `startup_failed` | Harness binary failed to start |
-| `prompt_denied` | Hook denied the prompt |
-| `resume_session_missing` | No session ID for resume |
+| `output_parse_error` | Failed to parse streaming harness output |
+| `parse_error` | Malformed final harness output prevented a trusted result |
+| `process_killed` | Harness process killed (generic fallback) |
+| `prompt_denied` | Hook denied the prompt before launch |
+| `recovery_failed` | Existing dispatch state could not be recovered |
+| `resume_session_missing` | No session ID available for resume |
+| `resume_start_failed` | Resume process failed to start |
 | `resume_unsupported` | Engine does not support resume |
+| `signal_killed` | Harness killed by OS signal (exit 137/143) |
+| `startup_failed` | Harness binary failed to start |
 
-Harness-native codes: Codex `context_length_exceeded`, Claude `result_error`,
-Gemini `tool_error`. Treat `error.suggestion` as guidance, not a closed enum.
+### Harness-Native Codes
+
+Additional codes surface directly from the underlying harness:
+
+- Codex: `context_length_exceeded`
+- Claude: `result_error`
+- Gemini: `tool_error`
+
+Treat `error.suggestion` as backward-compatible guidance derived from `error.hint` and `error.example`.

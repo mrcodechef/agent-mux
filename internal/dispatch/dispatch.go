@@ -203,35 +203,162 @@ func WithPromptPreamble(prompt string, spec *types.DispatchSpec) string {
 }
 
 type ErrorInfo struct {
-	Message    string
-	Suggestion string
-	Retryable  bool
+	Message   string
+	Hint      string
+	Example   string
+	Retryable bool
 }
 
 var ErrorCatalog = map[string]ErrorInfo{
-	"model_not_found":         {Retryable: true},
-	"engine_not_found":        {Message: "Unknown engine name.", Suggestion: "Valid engines: codex, claude, gemini", Retryable: true},
-	"binary_not_found":        {Suggestion: "Install the requested harness binary and verify it is on PATH before retrying.", Retryable: false},
-	"api_key_missing":         {Suggestion: "Set the provider API key in the environment expected by the harness, then retry.", Retryable: false},
-	"api_overloaded":          {Message: "Provider overloaded (429/529).", Suggestion: "Retry in 30s or try --engine with a different provider.", Retryable: true},
-	"api_error":               {Suggestion: "Retry once. If it repeats, switch model or provider and include the provider error details.", Retryable: true},
-	"frozen_tool_call":        {Suggestion: "Worker may be stuck in a hanging command or tool call. Retry with a narrower task or longer timeout. Partial work was preserved.", Retryable: true},
-	"invalid_args":            {Suggestion: "Fix the dispatch arguments and retry. Check required fields such as engine, prompt, and working directory.", Retryable: true},
-	"invalid_input":           {Suggestion: "Provide dispatch inputs without path separators, traversal segments, or empty basenames, then retry.", Retryable: true},
-	"config_error":            {Suggestion: "Fix the referenced config or role definition, then retry the dispatch.", Retryable: true},
-	"parse_error":             {Suggestion: "The harness emitted malformed output and no final response could be trusted. Retry once; if it repeats, inspect raw harness output.", Retryable: false},
-	"startup_failed":          {Suggestion: "The harness binary failed to start. Check that it is installed, accessible on PATH, and that arguments are valid.", Retryable: true},
-	"frozen_killed":           {Suggestion: "Worker was killed after prolonged silence. Retry with a narrower task or longer silence_kill_seconds. Partial work was preserved.", Retryable: true},
-	"signal_killed":           {Suggestion: "Harness process was terminated by an OS signal (SIGKILL/SIGTERM). Check for OOM kills (exit 137) or external termination.", Retryable: true},
-	"process_killed":          {Suggestion: "Check harness stderr and recent events, then retry once the underlying process issue is resolved.", Retryable: true},
-	"recovery_failed":         {Message: "No artifacts found for the given dispatch ID.", Suggestion: "Previous dispatch may not have written artifacts. Check the artifact directory.", Retryable: false},
-	"output_parse_error":      {Suggestion: "The harness emitted output agent-mux could not parse cleanly. Retry once; if it repeats, inspect raw harness output.", Retryable: false},
-	"skill_not_found":         {Retryable: true},
-	"coordinator_not_found":   {Retryable: true},
-	"prompt_file_missing":     {Retryable: true},
-	"artifact_dir_unwritable": {Retryable: false},
-	"interrupted":             {Suggestion: "Caller cancellation stopped the dispatch. Resume manually if you still need the work completed.", Retryable: false},
-	"max_depth_exceeded":      {Message: "Max dispatch depth reached.", Suggestion: "Complete work directly in the current dispatch instead of spawning another one.", Retryable: false},
+	"model_not_found": {
+		Message:   "Unknown model for engine.",
+		Hint:      "The selected model is not available for the current engine.",
+		Example:   "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
+		Retryable: true,
+	},
+	"engine_not_found": {
+		Message:   "Unknown engine name.",
+		Hint:      "agent-mux only supports the built-in engines codex, claude, and gemini.",
+		Example:   "Retry with a valid engine. Example: agent-mux -e codex --cwd /repo \"<prompt>\".",
+		Retryable: true,
+	},
+	"binary_not_found": {
+		Hint:      "The requested harness binary is not installed or is not on PATH for this shell.",
+		Example:   "Install the harness, confirm `codex`, `claude`, or `gemini` resolves on PATH, then retry the same agent-mux command.",
+		Retryable: false,
+	},
+	"frozen_tool_call": {
+		Message:   "Worker appears stuck in a tool call.",
+		Hint:      "Worker stopped producing harness events while likely blocked in a hanging tool or shell command. Partial work was preserved in the artifact directory.",
+		Example:   "Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". If long commands are expected, raise `silence_kill_seconds` in config.",
+		Retryable: true,
+	},
+	"invalid_args": {
+		Message:   "Invalid dispatch arguments.",
+		Hint:      "The dispatch request is missing required fields or contains invalid flag combinations.",
+		Example:   "Provide a valid engine, prompt, and working directory. Example: agent-mux -e codex --cwd /repo \"Fix failing test\".",
+		Retryable: true,
+	},
+	"invalid_input": {
+		Message:   "Input validation failed.",
+		Hint:      "One of the provided values failed validation, usually a dispatch ID, basename, path fragment, or duration.",
+		Example:   "Remove path separators or traversal segments and retry. Example: `--signal 01ABC...`, not `../01ABC`.",
+		Retryable: true,
+	},
+	"config_error": {
+		Message:   "Configuration is invalid.",
+		Hint:      "agent-mux could not load or validate the referenced config, role, or control path.",
+		Example:   "Fix the config file or role name, then retry. Example: agent-mux -R lifter --config /path/to/agent-mux.yaml --cwd /repo \"<prompt>\".",
+		Retryable: true,
+	},
+	"parse_error": {
+		Message:   "Malformed final harness output.",
+		Hint:      "The final harness output was malformed enough that no trustworthy terminal result could be built.",
+		Example:   "Retry once. If it repeats, inspect the raw harness output in the artifact directory before retrying.",
+		Retryable: false,
+	},
+	"startup_failed": {
+		Message:   "Harness process failed to start.",
+		Hint:      "The harness process failed before a working session started.",
+		Example:   "Check the harness install and arguments, then retry. Example: verify the engine binary runs directly from the same shell.",
+		Retryable: true,
+	},
+	"frozen_killed": {
+		Message:   "Worker killed after prolonged silence.",
+		Hint:      "Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
+		Example:   "Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
+		Retryable: true,
+	},
+	"signal_killed": {
+		Message:   "Harness terminated by OS signal.",
+		Hint:      "The harness process was terminated by the OS or another external actor, commonly SIGKILL, SIGTERM, or an OOM kill.",
+		Example:   "Check exit status, system logs, and memory pressure, then retry once the host is stable.",
+		Retryable: true,
+	},
+	"process_killed": {
+		Message:   "Harness process exited unexpectedly.",
+		Hint:      "The harness process exited unexpectedly and agent-mux could not classify the kill more precisely.",
+		Example:   "Inspect stderr and recent events in the artifact directory, fix the underlying process issue, then retry.",
+		Retryable: true,
+	},
+	"recovery_failed": {
+		Message:   "No artifacts found for the given dispatch ID.",
+		Hint:      "agent-mux could not find the prior dispatch state needed for this recovery or signal operation.",
+		Example:   "Verify the dispatch ID and artifact directory, then retry. Example: agent-mux ps --root /artifacts.",
+		Retryable: false,
+	},
+	"output_parse_error": {
+		Message:   "Failed to parse streaming harness output.",
+		Hint:      "The streaming harness event output could not be parsed cleanly.",
+		Example:   "Retry once. If it repeats, inspect `events.jsonl` or raw harness output in the artifact directory.",
+		Retryable: false,
+	},
+	"artifact_dir_unwritable": {
+		Message:   "Artifact directory is not writable.",
+		Hint:      "agent-mux could not create or write files in the artifact directory.",
+		Example:   "Choose a writable path or fix permissions. Example: agent-mux --artifact-dir /tmp/agent-mux --cwd /repo \"<prompt>\".",
+		Retryable: false,
+	},
+	"interrupted": {
+		Message:   "Dispatch interrupted by caller cancellation.",
+		Hint:      "The dispatch stopped because the caller context ended or an external cancellation signal arrived.",
+		Example:   "Retry the dispatch if the work is still needed, or resume manually from preserved artifacts.",
+		Retryable: false,
+	},
+	"abort_requested": {
+		Message:   "Abort requested via steer or control file.",
+		Hint:      "A steer or control-file abort explicitly requested that this dispatch stop early.",
+		Example:   "If you still want the work, rerun the dispatch with a narrower prompt or without issuing `ax steer abort`.",
+		Retryable: false,
+	},
+	"max_depth_exceeded": {
+		Message:   "Max dispatch depth reached.",
+		Hint:      "This task tried to spawn more nested dispatches than the configured safety limit allows.",
+		Example:   "Complete the work in the current agent, or raise the depth limit only if the nesting is intentional.",
+		Retryable: false,
+	},
+	"cancelled": {
+		Message:   "Dispatch cancelled before launch.",
+		Hint:      "The run was cancelled at the confirmation step, so no harness work started.",
+		Example:   "Rerun with confirmation accepted, or skip the prompt entirely: agent-mux --yes --cwd /repo \"<prompt>\".",
+		Retryable: false,
+	},
+	"prompt_denied": {
+		Message:   "Prompt blocked by hooks policy.",
+		Hint:      "A hooks policy blocked the prompt before the harness was allowed to start.",
+		Example:   "Remove the matched content from the prompt or adjust the hook policy, then retry the same agent-mux command.",
+		Retryable: false,
+	},
+	"event_denied": {
+		Message:   "Event blocked by hooks policy.",
+		Hint:      "A hooks policy blocked a harness event during execution, so the dispatch was stopped.",
+		Example:   "Inspect the matched rule in the hook configuration, adjust the policy or task, then rerun the dispatch.",
+		Retryable: false,
+	},
+	"internal_error": {
+		Message:   "agent-mux hit an internal error.",
+		Hint:      "agent-mux hit an internal invariant failure while building the result or command response.",
+		Example:   "Retry once. If it repeats, capture the full JSON result and artifact directory for debugging.",
+		Retryable: false,
+	},
+	"resume_unsupported": {
+		Message:   "Resume unsupported by harness adapter.",
+		Hint:      "The selected harness adapter does not support resuming an existing session, so inbox steering cannot restart it.",
+		Example:   "Use an engine or adapter with resume support, or rerun the task without mid-flight coordinator injection.",
+		Retryable: false,
+	},
+	"resume_session_missing": {
+		Message:   "No resumable session ID available.",
+		Hint:      "A resume was requested before the harness reported a resumable session or thread ID.",
+		Example:   "Wait until the run emits a session-start event before steering, then retry the injection.",
+		Retryable: false,
+	},
+	"resume_start_failed": {
+		Message:   "Failed to start resumed harness process.",
+		Hint:      "agent-mux attempted to resume the harness session, but the restart command failed.",
+		Example:   "Check the adapter resume arguments and harness installation, then retry from the preserved artifact directory.",
+		Retryable: false,
+	},
 }
 
 func NewDispatchError(code string, message string, suggestion string) *types.DispatchError {
@@ -243,14 +370,21 @@ func NewDispatchError(code string, message string, suggestion string) *types.Dis
 	if message == "" {
 		message = info.Message
 	}
-	if suggestion == "" {
-		suggestion = info.Suggestion
+
+	hint := info.Hint
+	example := info.Example
+	if suggestion != "" {
+		hint = suggestion
+		example = ""
 	}
+	suggestionText := strings.TrimSpace(hint + " " + example)
 
 	return &types.DispatchError{
 		Code:       code,
 		Message:    message,
-		Suggestion: suggestion,
+		Suggestion: suggestionText,
+		Hint:       hint,
+		Example:    example,
 		Retryable:  info.Retryable,
 	}
 }
