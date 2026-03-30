@@ -31,14 +31,12 @@ Complete flag table, --stdin JSON fields, and precedence rules.
 | `--salt` | | string | auto-generated | Human-readable dispatch salt |
 | `--recover` | | string | unset | Dispatch ID to continue from |
 | `--signal` | | string | unset | Dispatch ID to send a message to |
-| `--output` | `-o` | string | `json` | Output format: `json` or `text` |
 | `--stream` | `-S` | bool | `false` | Stream all events to stderr |
 | `--async` | | bool | `false` | Fire-and-forget; returns ack immediately |
 | `--full` | `-f` | bool | `true` | Full access mode |
 | `--no-full` | | bool | `false` | Disable full access |
 | `--stdin` | | bool | `false` | Read DispatchSpec JSON from stdin |
 | `--max-depth` | | int | `2` | Maximum recursive dispatch depth |
-| `--response-max-chars` | | int | from config | Truncate response beyond this |
 | `--no-subdispatch` | | bool | `false` | Disable recursive dispatch |
 | `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
 | `--yes` | | bool | `false` | Skip TTY confirmation |
@@ -48,7 +46,7 @@ Complete flag table, --stdin JSON fields, and precedence rules.
 
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
-| `--sandbox` | | string | `danger-full-access` | `danger-full-access`, `workspace-write`, `none` |
+| `--sandbox` | | string | `danger-full-access` | `danger-full-access`, `workspace-write`, `read-only` |
 | `--reasoning` | `-r` | string | `medium` | Codex reasoning effort |
 | `--add-dir` | | string[] | `[]` | Repeatable additional writable directories |
 
@@ -96,7 +94,6 @@ When using `--stdin`, pipe a JSON object. `prompt` must be non-empty.
 | Max depth | `max_depth` | int | 2 | Recursive dispatch limit |
 | Allow subdispatch | `allow_subdispatch` | bool | true | Recursive dispatch toggle |
 | Full access | `full_access` | bool | true | Full filesystem access |
-| Response max chars | `response_max_chars` | int | 16000 | Truncation threshold |
 | Salt | `salt` | string | auto | Human-readable identifier |
 | Dispatch ID | `dispatch_id` | string | auto ULID | Unique dispatch identifier |
 | Artifact dir | `artifact_dir` | string | auto | Override artifact directory |

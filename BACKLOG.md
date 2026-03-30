@@ -9,6 +9,25 @@ Replaces `FEATURES.md` (preserved at `_archive/FEATURES.md`).
 
 ---
 
+## Strategic Direction
+
+*Added 2026-03-30*
+
+### Engine Priority Order
+1. **Codex** — current focus. Perfect the dispatch, ax-eval coverage, steering, all rough edges. The bar must be top-notch before moving on.
+2. **Gemini** — next engine after Codex reaches quality gate.
+3. **Other harnesses** — after Gemini parity.
+
+### Post-Freeze Plan
+After this cleanup session, agent-mux enters a **multi-week development freeze**. No new features, no polish.
+
+First post-freeze activity (1-2 weeks out): **Dissect the Codex CLI SDK (TypeScript)** end-to-end. Goal: hunt for patterns, undocumented capabilities, and integration points that agent-mux could leverage. Deep reading, not building.
+
+### Current Posture
+Codex-first. Ship quality. Resist the infinite polish trap.
+
+---
+
 ## P0 — Next Up
 
 ### B-5: Config path resolution bug (`--cwd` doesn't pick up fixture config) — FIXED
@@ -72,43 +91,21 @@ startup_failed) for failed dispatches by scanning events.jsonl. Removed the
 
 Three ax-eval cases have inadequate assertions:
 
-1. **`variant-resolution`** — previously score 0.5, blocked by B-5 (config
-   path resolution). B-5 is now fixed — the fixture config is discoverable
-   from the temp test dir. Should score higher in the next ax-eval run.
-   Assertions still check stderr events for model confirmation; may need
-   hardening if `--stream` is not active during tests.
-
-2. **`handoff-summary-extraction`** — scored 1.0 in latest run (2026-03-30).
+1. **`handoff-summary-extraction`** — scored 1.0 in latest run (2026-03-30).
    `handoff_summary` field is now present in the output contract and
-   correctly extracted. Likely resolved.
+   correctly extracted. **Likely resolved.**
 
-3. **`response-truncation`** — explicitly skipped. Truncation is disabled by
-   design (see Parked section). Case should be updated to assert that
-   truncation does NOT occur, rather than being skipped entirely.
+2. **`variant-resolution`** — was 0.5, blocked by B-5 (config path
+   resolution). B-5 is now fixed. **Needs re-run** — expect score to improve
+   post-fix. Assertions still check stderr events for model confirmation; may
+   need hardening if `--stream` is not active during tests.
+
+3. **`response-truncation`** — skipped. The assertion direction is inverted:
+   the case checks `truncation=true` but truncation is disabled by design.
+   **Fix needed: invert the assertion** to confirm truncation does NOT occur.
+   Not a bug fix — assertion logic must be corrected.
 
 **Target:** all three cases at score ≥ 0.7 after fixes.
-
----
-
-### F-11: Codex soft stdin steering via named pipe
-**Type:** feature | **Priority:** P0 | **Status:** open — design documented
-**Design:** `references/streaming-protocol-v2.md` § "Codex Soft Stdin Steering"
-**Decided:** promoted P2 → P0, `coordinator` (2026-03-30)
-
-The F-6 stdin nudge (warn-threshold write) is implemented. The next layer is
-*soft steering*: sending structured prompts via stdin to redirect a Codex
-worker mid-flight without killing it — nudge, redirect, extend-scope, all as
-continuation input rather than process restart. Design doc covers the envelope
-format, tool-boundary-awareness (deferred delivery until active tool
-completes), and the state machine for steering vs. aborting.
-
-This is the clean steering path that avoids the kill+restart resume cycle.
-Promotion to P0 reflects that the kill+restart cycle is the dominant pain
-point in live GSD sessions.
-
-**Relation to F-6 / S-1:** F-6 is the plumbing (stdin pipe exists, nudge at
-warn threshold). F-11 is the protocol layer on top. S-1 (repeat escalation)
-would use F-11 as its delivery mechanism.
 
 ---
 
@@ -411,3 +408,4 @@ All items include session ID where the work was done.
 | B-5: config path resolution (`--cwd`) | 3.2.1 | `coordinator` | Absolutize cwd in configPaths + copy .agent-mux to testdata/fixture |
 | B-6: write-before-ack race | 3.2.1 | `coordinator` | Fsync host.pid + status.json before async ack emission |
 | B-7: `result --json` status field | 3.2.1 | `coordinator` | enrichResultStatus() + kill_reason from events.jsonl |
+| F-11: Codex soft stdin steering via named pipe | 3.2.0 | `1daaa1d6` | Commit `079b41a`. Protocol layer on F-6 plumbing — structured steering envelopes, tool-boundary-aware deferred delivery, state machine for steer vs. abort. |
