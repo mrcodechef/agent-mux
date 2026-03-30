@@ -478,26 +478,90 @@ func buildCasesV1(cwd string) []TestCase {
 					return Verdict{Pass: false, Score: 0.0,
 						Reason: fmt.Sprintf("result collection failed: exit=%d stdout=%s", collected.ExitCode, string(collected.RawStdout))}
 				}
-				// The nudge was delivered (steer command succeeded) and the worker eventually completed.
-				// Check for evidence the nudge was received: response mentions NUDGED, or events contain coordinator_inject.
 				responseHasNudge := strings.Contains(strings.ToUpper(collected.Response), "NUDGE")
 				hasInjectEvent := false
+				resumedSession := false
 				for _, e := range collected.Events {
-					if e.Type == "coordinator_inject" || e.Type == "inbox_delivered" {
+					if e.Type == "coordinator_inject" {
 						hasInjectEvent = true
+					}
+					if e.Type == "progress" && strings.Contains(strings.ToLower(e.Message), "restarting harness session") {
+						resumedSession = true
+					}
+				}
+				if hasInjectEvent && !resumedSession && (responseHasNudge || collected.Status == "completed") {
+					return Verdict{Pass: true, Score: 1.0,
+						Reason: fmt.Sprintf("soft steer delivered without resume (response_has_nudge=%v, inject_event=%v, status=%s)",
+							responseHasNudge, hasInjectEvent, collected.Status)}
+				}
+				return Verdict{Pass: false, Score: 0.5,
+					Reason: fmt.Sprintf("missing FIFO soft-steer evidence (inject_event=%v resumed=%v status=%s response_len=%d)",
+						hasInjectEvent, resumedSession, collected.Status, len(collected.Response))}
+			},
+		},
+		{
+			Name:         "steer-redirect-fifo",
+			Category:     CatSteering,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "Read all files in this repository carefully and prepare a long written summary before responding.",
+			CWD:          cwd,
+			TimeoutSec:   300,
+			MaxWallClock: 6 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"--async"},
+			IsAsync:      true,
+			SteerSpec: &SteerSpec{
+				DelayBeforeSteer: 3 * time.Second,
+				Action:           "redirect",
+				Message:          "Stop the current task and create a file named fifo_redirect_marker.txt containing exactly FIFO_REDIRECT.",
+			},
+			EvalAsync: func(ack Result, collected Result) Verdict {
+				ackStr := string(ack.RawStdout)
+				if !strings.Contains(ackStr, `"kind":"async_started"`) {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: fmt.Sprintf("async ack missing kind=async_started; got: %s", ackStr)}
+				}
+				if collected.ExitCode != 0 && collected.Status == "" {
+					return Verdict{Pass: false, Score: 0.0,
+						Reason: fmt.Sprintf("result collection failed: exit=%d stdout=%s", collected.ExitCode, string(collected.RawStdout))}
+				}
+
+				hasInjectEvent := false
+				resumedSession := false
+				for _, e := range collected.Events {
+					if e.Type == "coordinator_inject" {
+						hasInjectEvent = true
+					}
+					if e.Type == "progress" && strings.Contains(strings.ToLower(e.Message), "restarting harness session") {
+						resumedSession = true
+					}
+				}
+
+				markerOK := false
+				for _, dir := range []string{collected.ArtifactDir, cwd} {
+					if dir == "" {
+						continue
+					}
+					path := filepath.Join(dir, "fifo_redirect_marker.txt")
+					data, err := os.ReadFile(path)
+					if err == nil && strings.TrimSpace(string(data)) == "FIFO_REDIRECT" {
+						markerOK = true
+						if dir == cwd {
+							defer os.Remove(path)
+						}
 						break
 					}
 				}
-				// If we got a non-empty response, the worker completed (ax result blocks until done).
-				workerCompleted := len(strings.TrimSpace(collected.Response)) > 0 || collected.Status == "completed"
-				if responseHasNudge || hasInjectEvent || workerCompleted {
+
+				if markerOK && hasInjectEvent && !resumedSession {
 					return Verdict{Pass: true, Score: 1.0,
-						Reason: fmt.Sprintf("nudge delivered and worker completed (response_has_nudge=%v, inject_event=%v, response_len=%d, status=%s)",
-							responseHasNudge, hasInjectEvent, len(collected.Response), collected.Status)}
+						Reason: fmt.Sprintf("redirect marker created through soft steer (inject_event=%v, status=%s)", hasInjectEvent, collected.Status)}
 				}
 				return Verdict{Pass: false, Score: 0.5,
-					Reason: fmt.Sprintf("worker did not complete after nudge; status=%s response_len=%d",
-						collected.Status, len(collected.Response))}
+					Reason: fmt.Sprintf("redirect marker missing or restart detected (marker=%v inject_event=%v resumed=%v status=%s)",
+						markerOK, hasInjectEvent, resumedSession, collected.Status)}
 			},
 		},
 		{
@@ -699,7 +763,7 @@ func buildCasesV1(cwd string) []TestCase {
 			MaxWallClock: 4 * time.Minute,
 			SkipSkills:   true,
 			// Use -R=scout — lightweight role, codex engine, quick timeout.
-			ExtraFlags:   []string{"-R=scout"},
+			ExtraFlags: []string{"-R=scout"},
 			Evaluate: compose(
 				statusIs("completed"),
 				noErrorEvents(),

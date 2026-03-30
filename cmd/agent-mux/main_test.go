@@ -9,10 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/buildoak/agent-mux/internal/config"
+	"github.com/buildoak/agent-mux/internal/dispatch"
+	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/recovery"
@@ -1861,6 +1865,91 @@ role = "missing-role"
 	}
 }
 
+func TestSteerNudgeUsesFIFOWhenReady(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO steering is Unix-only")
+	}
+
+	dispatchID, artifactDir := prepareSteerDispatchFixture(t, true)
+	if err := fifo.Create(fifo.Path(artifactDir)); err != nil {
+		t.Fatalf("Create(stdin.pipe): %v", err)
+	}
+	reader, err := fifo.OpenReadNonblock(fifo.Path(artifactDir))
+	if err != nil {
+		t.Fatalf("OpenReadNonblock(%q): %v", fifo.Path(artifactDir), err)
+	}
+	defer reader.Close()
+
+	var stdout bytes.Buffer
+	exitCode := runSteerCommand([]string{dispatchID, "nudge", "fifo ready"}, &stdout)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["mechanism"] != "stdin_fifo" {
+		t.Fatalf("mechanism = %#v, want stdin_fifo", raw["mechanism"])
+	}
+
+	got := readFIFOTestPayload(t, reader)
+	if !strings.Contains(got, `"action":"nudge"`) || !strings.Contains(got, `"message":"fifo ready"`) {
+		t.Fatalf("FIFO payload = %q, want nudge envelope", got)
+	}
+}
+
+func TestSteerNudgeFallsBackToInboxWhenFIFOUnavailable(t *testing.T) {
+	dispatchID, artifactDir := prepareSteerDispatchFixture(t, false)
+
+	var stdout bytes.Buffer
+	exitCode := runSteerCommand([]string{dispatchID, "nudge", "fallback nudge"}, &stdout)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["mechanism"] != "inbox" {
+		t.Fatalf("mechanism = %#v, want inbox", raw["mechanism"])
+	}
+
+	messages, err := inbox.ReadInbox(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Message != "[NUDGE] fallback nudge" {
+		t.Fatalf("messages = %#v, want [NUDGE] fallback nudge", messages)
+	}
+}
+
+func TestSteerRedirectFIFOWriteErrorsFallbackToInbox(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO steering is Unix-only")
+	}
+
+	dispatchID, artifactDir := prepareSteerDispatchFixture(t, true)
+	if err := fifo.Create(fifo.Path(artifactDir)); err != nil {
+		t.Fatalf("Create(stdin.pipe): %v", err)
+	}
+
+	var stdout bytes.Buffer
+	exitCode := runSteerCommand([]string{dispatchID, "redirect", "switch focus"}, &stdout)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	if raw["mechanism"] != "inbox" {
+		t.Fatalf("mechanism = %#v, want inbox", raw["mechanism"])
+	}
+
+	messages, err := inbox.ReadInbox(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Message != "[REDIRECT] switch focus" {
+		t.Fatalf("messages = %#v, want [REDIRECT] switch focus", messages)
+	}
+}
+
 func TestVerboseFlagDefault(t *testing.T) {
 	fs, parsed := newFlagSet(nil)
 	if err := fs.Parse([]string{"--engine", "codex", "hello"}); err != nil {
@@ -1884,7 +1973,6 @@ func TestVerboseFlagSet(t *testing.T) {
 		t.Error("verbose should be true when --verbose passed")
 	}
 }
-
 
 func TestRunPrependsContextFilePreamble(t *testing.T) {
 	isolateHome(t)
@@ -2156,6 +2244,72 @@ func decodeJSONMap(t *testing.T, data []byte) map[string]any {
 		t.Fatalf("unmarshal JSON map: %v\nstdout=%q", err, string(data))
 	}
 	return result
+}
+
+func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, string) {
+	t.Helper()
+
+	isolateHome(t)
+
+	dispatchID := fmt.Sprintf("01STEER%018d", time.Now().UnixNano()%1_000_000_000_000_000_000)
+	artifactDir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  dispatchID,
+		Salt:        "test-salt",
+		TraceToken:  "trace-token",
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Prompt:      "steer test",
+		Cwd:         artifactDir,
+		ArtifactDir: artifactDir,
+	}
+	if err := dispatch.EnsureArtifactDir(artifactDir); err != nil {
+		t.Fatalf("EnsureArtifactDir: %v", err)
+	}
+	if err := dispatch.WriteDispatchMeta(artifactDir, spec); err != nil {
+		t.Fatalf("WriteDispatchMeta: %v", err)
+	}
+	if err := dispatch.WriteStatusJSON(artifactDir, dispatch.LiveStatus{
+		State:          "running",
+		ElapsedS:       1,
+		LastActivity:   "testing",
+		ToolsUsed:      0,
+		FilesChanged:   0,
+		StdinPipeReady: stdinPipeReady,
+		DispatchID:     dispatchID,
+	}); err != nil {
+		t.Fatalf("WriteStatusJSON: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactDir, "host.pid"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
+		t.Fatalf("write host.pid: %v", err)
+	}
+	if err := recovery.RegisterDispatch(dispatchID, artifactDir); err != nil {
+		t.Fatalf("RegisterDispatch: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Remove(recovery.ControlRecordPath(dispatchID))
+	})
+	return dispatchID, artifactDir
+}
+
+func readFIFOTestPayload(t *testing.T, reader *os.File) string {
+	t.Helper()
+
+	deadline := time.Now().Add(2 * time.Second)
+	buf := make([]byte, 512)
+	for time.Now().Before(deadline) {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			return string(buf[:n])
+		}
+		if err == nil {
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("timed out reading FIFO payload")
+	return ""
 }
 
 func stringSliceFromJSONValue(t *testing.T, value any) []string {

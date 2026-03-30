@@ -13,11 +13,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
+	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
+	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/store"
@@ -46,6 +49,7 @@ type loopSignalKind int
 const (
 	loopSignalEvent loopSignalKind = iota
 	loopSignalInbox
+	loopSignalSoftSteer
 	loopSignalParseError
 	loopSignalScanError
 )
@@ -55,7 +59,14 @@ type loopSignal struct {
 	runGen  uint64
 	event   *types.HarnessEvent
 	message string
+	steer   adapter.CodexSoftSteerEnvelope
 	err     error
+}
+
+type softStdinBridge struct {
+	path          string
+	readFile      *os.File
+	keepaliveFile *os.File
 }
 
 func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifactDir string, signals chan<- loopSignal) {
@@ -194,21 +205,21 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		ToolCalls:    []string{},
 	}
 	var (
-		mu               sync.Mutex
-		lastResponse     string
-		lastProgressText string
-		sessionID        string
-		totalTokens      *types.TokenUsage
-		turnCount        int
-		lastError        *types.HarnessEvent
-		lastActivity     = time.Now()
-		frozenWarned     bool
-		terminalState    string // "", "timed_out", "failed", "interrupted"
-		softTimedOut     bool
-		streamScanErr    error
-		dispatchErr      *types.DispatchError
-		sawResponse      bool
-		toolsUsedCount   int
+		mu                sync.Mutex
+		lastResponse      string
+		lastProgressText  string
+		sessionID         string
+		totalTokens       *types.TokenUsage
+		turnCount         int
+		lastError         *types.HarnessEvent
+		lastActivity      = time.Now()
+		frozenWarned      bool
+		terminalState     string // "", "timed_out", "failed", "interrupted"
+		softTimedOut      bool
+		streamScanErr     error
+		dispatchErr       *types.DispatchError
+		sawResponse       bool
+		toolsUsedCount    int
 		filesChangedCount int
 	)
 	parseErrorCount := 0
@@ -240,10 +251,13 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	forceBuildResult := false
 	runReadyForRestart := false
 	pendingMessages := make([]string, 0)
+	pendingSoftSteer := make([]adapter.CodexSoftSteerEnvelope, 0)
 	restarting := false
 	var currentGen uint64 = 1
 	var currentRun *runHandle
 	var currentStderr *strings.Builder
+	var stdinBridge *softStdinBridge
+	stdinPipeReady := false
 
 	handleHarnessEvent := func(evt *types.HarnessEvent) {
 		mu.Lock()
@@ -472,6 +486,14 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 			pendingMessages = append(pendingMessages, sig.message)
 
+		case loopSignalSoftSteer:
+			formatted := string(adapter.FormatSoftSteerInput(sig.steer.Action, sig.steer.Message))
+			_ = emitter.Emit(event.Event{Type: "coordinator_inject", Message: strings.TrimRight(formatted, "\n")})
+			if len(pendingSoftSteer) == 0 {
+				steerPendingSince = time.Now()
+			}
+			pendingSoftSteer = append(pendingSoftSteer, sig.steer)
+
 		case loopSignalParseError:
 			parseErrorCount++
 			_ = emitter.EmitError("output_parse_error", fmt.Sprintf("Parse harness event: %v", sig.err))
@@ -490,7 +512,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		for {
 			select {
 			case sig := <-signals:
-				if sig.runGen != runGen {
+				if sig.runGen != 0 && sig.runGen != runGen {
 					continue
 				}
 				processSignal(sig)
@@ -601,8 +623,67 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		return true
 	}
 
+	deliverSoftSteer := func() bool {
+		if terminalState != "" || len(pendingSoftSteer) == 0 || currentRun == nil || currentRun.stdinPipe == nil {
+			return false
+		}
+
+		mu.Lock()
+		cmd := activeCommand
+		mu.Unlock()
+		if cmd != "" {
+			exceeded := !steerPendingSince.IsZero() && time.Since(steerPendingSince).Seconds() >= float64(maxSteerWait)
+			if !exceeded {
+				_ = emitter.Emit(event.Event{
+					Type:    "steer_deferred",
+					Message: fmt.Sprintf("tool_active: deferring stdin steer while %q is running", cmd),
+					Command: cmd,
+				})
+				return false
+			}
+			_ = emitter.Emit(event.Event{
+				Type:    "steer_forced",
+				Message: fmt.Sprintf("max_steer_wait_exceeded: waited %ds, force-proceeding with stdin steer", int(time.Since(steerPendingSince).Seconds())),
+				Command: cmd,
+			})
+		}
+
+		req := pendingSoftSteer[0]
+		if err := deliverSoftSteer(currentRun, req); err != nil {
+			_ = emitter.EmitError("stdin_steer_failed", fmt.Sprintf("Deliver stdin steer: %v", err))
+			return false
+		}
+		pendingSoftSteer = pendingSoftSteer[1:]
+		if len(pendingSoftSteer) == 0 && len(pendingMessages) == 0 {
+			steerPendingSince = time.Time{}
+		}
+		return true
+	}
+
+	closeSoftBridge := func() {
+		if stdinBridge == nil {
+			return
+		}
+		_ = stdinBridge.close()
+		stdinBridge = nil
+		stdinPipeReady = false
+	}
+
+	if bridge, err := startSoftStdinBridge(spec.ArtifactDir, signals); err == nil {
+		stdinBridge = bridge
+		stdinPipeReady = true
+	} else if !errors.Is(err, fifo.ErrUnsupported) {
+		return buildFailureResult(
+			spec, metadata, startTime, emitter,
+			"startup_failed",
+			fmt.Sprintf("start stdin fifo bridge: %v", err),
+			"Check that the artifact directory is writable and supports FIFOs.",
+		), nil
+	}
+
 	currentRun, currentStderr, err = startRun(currentGen, args)
 	if err != nil {
+		closeSoftBridge()
 		return buildFailureResult(
 			spec, metadata, startTime, emitter,
 			"startup_failed",
@@ -622,10 +703,13 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	for {
 		select {
 		case sig := <-signals:
-			if sig.runGen != currentGen {
+			if sig.runGen != 0 && sig.runGen != currentGen {
 				continue
 			}
 			processSignal(sig)
+			if deliverSoftSteer() {
+				continue
+			}
 			if restartRun(false) {
 				continue
 			}
@@ -635,13 +719,18 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case procErr = <-currentRun.procDone:
 			drainCurrentSignals(currentGen)
+			if deliverSoftSteer() {
+				continue
+			}
 			if restartRun(true) {
 				continue
 			}
 			if forceBuildResult {
+				closeSoftBridge()
 				goto buildResult
 			}
 			<-currentRun.streamDone
+			closeSoftBridge()
 			goto buildResult
 
 		case <-softTimer:
@@ -659,10 +748,14 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			setTerminal("timed_out")
 			_ = currentRun.proc.GracefulStop(5)
 			<-currentRun.streamDone
+			closeSoftBridge()
 			goto buildResult
 
 		case <-watchdogTicker.C:
 			enqueueInboxMessages()
+			if deliverSoftSteer() {
+				continue
+			}
 			if restartRun(false) {
 				continue
 			}
@@ -707,19 +800,13 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			statusFilesChanged := filesChangedCount
 			mu.Unlock()
 			// Atomic status.json write for pull-based status.
-			_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-				State:        "running",
-				ElapsedS:     int(time.Since(startTime).Seconds()),
-				LastActivity: statusActivity,
-				ToolsUsed:    statusToolsUsed,
-				FilesChanged: statusFilesChanged,
-				DispatchID:   spec.DispatchID,
-			})
+			_ = writeRunningStatus(spec.ArtifactDir, spec.DispatchID, startTime, statusActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
 			if silence >= effectiveKill && setTerminal("failed") {
 				_ = emitter.EmitError("frozen_tool_call", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
 				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
 				_ = currentRun.proc.GracefulStop(5)
 				<-currentRun.streamDone
+				closeSoftBridge()
 				goto buildResult
 			}
 			if shouldWarn {
@@ -733,6 +820,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 
 		case <-inboxTicker.C:
 			enqueueInboxMessages()
+			if deliverSoftSteer() {
+				continue
+			}
 			if restartRun(false) {
 				continue
 			}
@@ -745,12 +835,14 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 				_ = emitter.EmitError("interrupted", "Dispatch interrupted by caller cancellation.")
 				_ = currentRun.proc.GracefulStop(5)
 				<-currentRun.streamDone
+				closeSoftBridge()
 				goto buildResult
 			}
 		}
 	}
 
 buildResult:
+	closeSoftBridge()
 	stopHeartbeat()
 
 	durationMS := time.Since(startTime).Milliseconds()
@@ -840,12 +932,13 @@ func buildTerminalMetaWriteFailureResult(spec *types.DispatchSpec, activity *typ
 
 func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-		State:        "completed",
-		ElapsedS:     int(durationMS / 1000),
-		LastActivity: "done",
-		ToolsUsed:    len(activity.ToolCalls),
-		FilesChanged: len(activity.FilesChanged),
-		DispatchID:   spec.DispatchID,
+		State:          "completed",
+		ElapsedS:       int(durationMS / 1000),
+		LastActivity:   "done",
+		ToolsUsed:      len(activity.ToolCalls),
+		FilesChanged:   len(activity.FilesChanged),
+		StdinPipeReady: false,
+		DispatchID:     spec.DispatchID,
 	})
 	result := dispatch.BuildCompletedResult(spec, response, activity, metadata, durationMS, spec.ResponseMaxChars)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "completed", result.Artifacts); err != nil {
@@ -868,12 +961,13 @@ func finalizeCompleted(spec *types.DispatchSpec, emitter *event.Emitter, respons
 
 func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-		State:        "timed_out",
-		ElapsedS:     int(durationMS / 1000),
-		LastActivity: "timed_out",
-		ToolsUsed:    len(activity.ToolCalls),
-		FilesChanged: len(activity.FilesChanged),
-		DispatchID:   spec.DispatchID,
+		State:          "timed_out",
+		ElapsedS:       int(durationMS / 1000),
+		LastActivity:   "timed_out",
+		ToolsUsed:      len(activity.ToolCalls),
+		FilesChanged:   len(activity.FilesChanged),
+		StdinPipeReady: false,
+		DispatchID:     spec.DispatchID,
 	})
 	result := dispatch.BuildTimedOutResult(spec, response, fmt.Sprintf("Soft timeout at %ds, hard kill after %ds grace.", spec.TimeoutSec, spec.GraceSec), activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "timed_out", result.Artifacts); err != nil {
@@ -893,12 +987,13 @@ func finalizeTimedOut(spec *types.DispatchSpec, emitter *event.Emitter, response
 
 func finalizeFailed(spec *types.DispatchSpec, emitter *event.Emitter, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
 	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-		State:        "failed",
-		ElapsedS:     int(durationMS / 1000),
-		LastActivity: "failed",
-		ToolsUsed:    len(activity.ToolCalls),
-		FilesChanged: len(activity.FilesChanged),
-		DispatchID:   spec.DispatchID,
+		State:          "failed",
+		ElapsedS:       int(durationMS / 1000),
+		LastActivity:   "failed",
+		ToolsUsed:      len(activity.ToolCalls),
+		FilesChanged:   len(activity.FilesChanged),
+		StdinPipeReady: false,
+		DispatchID:     spec.DispatchID,
 	})
 	result := dispatch.BuildFailedResult(spec, dispErr, activity, metadata, durationMS)
 	if err := dispatch.UpdateDispatchMeta(spec.ArtifactDir, "failed", result.Artifacts); err != nil {
@@ -1170,11 +1265,116 @@ func intEngineOpt(spec *types.DispatchSpec, key string, fallback int) int {
 func formatSteerMessage(message string) string {
 	if strings.HasPrefix(message, "[REDIRECT] ") {
 		body := strings.TrimPrefix(message, "[REDIRECT] ")
-		return "IMPORTANT: The coordinator has redirected your task. Stop your current approach and follow these new instructions instead:\n" + body
+		return strings.TrimRight(string(adapter.FormatSoftSteerInput("redirect", body)), "\n")
 	}
 	if strings.HasPrefix(message, "[NUDGE] ") {
 		body := strings.TrimPrefix(message, "[NUDGE] ")
-		return "Note from coordinator: " + body
+		return strings.TrimRight(string(adapter.FormatSoftSteerInput("nudge", body)), "\n")
 	}
 	return message
+}
+
+func startSoftStdinBridge(artifactDir string, signals chan<- loopSignal) (*softStdinBridge, error) {
+	path := fifo.Path(artifactDir)
+	if err := fifo.Create(path); err != nil {
+		return nil, err
+	}
+	readFile, err := fifo.OpenReadNonblock(path)
+	if err != nil {
+		_ = fifo.Remove(path)
+		return nil, err
+	}
+	keepaliveFile, err := fifo.OpenWriteNonblock(path)
+	if err != nil {
+		_ = readFile.Close()
+		_ = fifo.Remove(path)
+		return nil, err
+	}
+	bridge := &softStdinBridge{
+		path:          path,
+		readFile:      readFile,
+		keepaliveFile: keepaliveFile,
+	}
+	go scanSoftStdinFIFO(readFile, signals)
+	return bridge, nil
+}
+
+func (b *softStdinBridge) close() error {
+	if b == nil {
+		return nil
+	}
+	var errs []error
+	if b.readFile != nil {
+		if err := b.readFile.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			errs = append(errs, err)
+		}
+	}
+	if b.keepaliveFile != nil {
+		if err := b.keepaliveFile.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			errs = append(errs, err)
+		}
+	}
+	if err := fifo.Remove(b.path); err != nil && !errors.Is(err, fifo.ErrUnsupported) {
+		errs = append(errs, err)
+	}
+	return errors.Join(errs...)
+}
+
+func scanSoftStdinFIFO(r io.Reader, signals chan<- loopSignal) {
+	reader := bufio.NewReader(r)
+	for {
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			if errors.Is(err, os.ErrClosed) {
+				return
+			}
+			var pathErr *os.PathError
+			if errors.As(err, &pathErr) && errors.Is(pathErr.Err, syscall.EAGAIN) {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			if errors.Is(err, syscall.EAGAIN) {
+				time.Sleep(50 * time.Millisecond)
+				continue
+			}
+			if len(line) == 0 {
+				signals <- loopSignal{kind: loopSignalScanError, err: err}
+				return
+			}
+		}
+		line = bytesTrimSpace(line)
+		if len(line) == 0 {
+			continue
+		}
+		req, decodeErr := adapter.DecodeSoftSteerEnvelope(line)
+		if decodeErr != nil {
+			signals <- loopSignal{kind: loopSignalParseError, err: decodeErr}
+			continue
+		}
+		signals <- loopSignal{kind: loopSignalSoftSteer, steer: req}
+	}
+}
+
+func deliverSoftSteer(run *runHandle, req adapter.CodexSoftSteerEnvelope) error {
+	if run == nil || run.stdinPipe == nil {
+		return errors.New("stdin pipe unavailable")
+	}
+	_, err := run.stdinPipe.Write(adapter.FormatSoftSteerInput(req.Action, req.Message))
+	return err
+}
+
+func writeRunningStatus(artifactDir, dispatchID string, startTime time.Time, lastActivity string, toolsUsed, filesChanged int, stdinPipeReady bool) error {
+	return dispatch.WriteStatusJSON(artifactDir, dispatch.LiveStatus{
+		State:          "running",
+		ElapsedS:       int(time.Since(startTime).Seconds()),
+		LastActivity:   lastActivity,
+		ToolsUsed:      toolsUsed,
+		FilesChanged:   filesChanged,
+		StdinPipeReady: stdinPipeReady,
+		DispatchID:     dispatchID,
+	})
+}
+
+func bytesTrimSpace(line []byte) []byte {
+	return []byte(strings.TrimSpace(string(line)))
 }

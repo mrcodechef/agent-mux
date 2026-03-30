@@ -2,7 +2,7 @@
 
 agent-mux provides mid-flight control over running dispatches through two mechanisms: the signal/inbox system for message delivery, and the `steer` subcommand for structured control actions.
 
-Steering is decoupled from the dispatch path. A running worker does not need to be aware of steering capability; messages arrive through the inbox and are consumed at event boundaries.
+Steering is decoupled from the dispatch path. For most harnesses, messages arrive through the inbox and are consumed at event boundaries. For live Codex workers on Unix, `steer nudge` and `steer redirect` can use a dispatch-local FIFO to inject soft steering over the worker stdin pipe without forcing a resume.
 
 ## Signal System
 
@@ -57,7 +57,7 @@ agent-mux steer 01JQXYZ nudge
 agent-mux steer 01JQXYZ nudge "Please summarize what you have so far"
 ```
 
-Sends a wrap-up message via inbox. Default message: "Please wrap up your current work and provide a final summary."
+Sends a wrap-up message. On live Codex workers with a ready stdin FIFO, agent-mux injects the nudge through `stdin.pipe`. Otherwise it falls back to inbox delivery. Default message: "Please wrap up your current work and provide a final summary."
 
 ### steer redirect
 
@@ -65,7 +65,23 @@ Sends a wrap-up message via inbox. Default message: "Please wrap up your current
 agent-mux steer 01JQXYZ redirect "focus on the tests, skip the refactor"
 ```
 
-Redirects the worker with new instructions via inbox. The instructions argument is required.
+Redirects the worker with new instructions. On live Codex workers with a ready stdin FIFO, agent-mux injects the redirect through `stdin.pipe`. Otherwise it falls back to inbox delivery. The instructions argument is required.
+
+## FIFO Soft Steering For Codex
+
+Codex dispatches on Unix create `stdin.pipe` inside the artifact directory and keep a reader open for the dispatch lifetime. `agent-mux steer <id> nudge|redirect` checks `_dispatch_meta.json`, `status.json`, and `host.pid`; when the worker is still running and `stdin_pipe_ready` is true, the CLI writes a single JSON envelope to the FIFO and closes it immediately.
+
+This path avoids the inbox -> stop -> resume cycle. The LoopEngine receives the envelope, emits `coordinator_inject`, and writes the formatted steer text into the live Codex stdin pipe. If a tool call is active, delivery is deferred until the tool ends.
+
+FIFO soft steering is used only when all of these are true:
+
+- Engine is `codex`
+- Platform supports FIFOs (Unix; Windows stays on inbox fallback)
+- `status.json` reports `state: "running"`
+- `status.json` reports `stdin_pipe_ready: true`
+- `host.pid` exists and is still alive
+
+Fallback to inbox happens when any of those checks fail, or when FIFO open/write returns readiness errors such as missing pipe, no reader, or broken pipe.
 
 ### steer extend
 
@@ -91,11 +107,25 @@ All steer commands output a JSON ack:
 {
   "action": "redirect",
   "dispatch_id": "01JQXYZ...",
+  "mechanism": "stdin_fifo",
   "delivered": true
 }
 ```
 
+`mechanism` reports how the steer action was delivered:
+
+- `stdin_fifo`: live Codex soft steering through `stdin.pipe`
+- `inbox`: inbox fallback for non-Codex, non-Unix, not-ready, or failed FIFO delivery
+- `sigterm`: `steer abort` delivered through `SIGTERM`
+- `control_file`: `steer abort` fallback through `control.json`
+
 Errors follow the standard envelope: `{"kind":"error","error":{...}}`.
+
+## status.json
+
+Running dispatches write `status.json` with live state, activity counters, and steering readiness. For soft steering, the important field is:
+
+- `stdin_pipe_ready`: true when the dispatch-local `stdin.pipe` FIFO is live and safe for `steer nudge` / `steer redirect`
 
 ## Cross-References
 

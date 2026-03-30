@@ -2,17 +2,21 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
+	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/types"
@@ -891,9 +895,9 @@ func TestLongCommandExtendsSilenceThreshold(t *testing.T) {
 		GraceSec:    1,
 		TimeoutSec:  30,
 		EngineOpts: map[string]any{
-			"silence_warn_seconds":          1,
-			"silence_kill_seconds":          2,
-			"long_command_silence_seconds":  20,
+			"silence_warn_seconds":         1,
+			"silence_kill_seconds":         2,
+			"long_command_silence_seconds": 20,
 		},
 	}
 
@@ -943,9 +947,9 @@ func TestUnknownCommandKilledAtNormalThreshold(t *testing.T) {
 		GraceSec:    1,
 		TimeoutSec:  30,
 		EngineOpts: map[string]any{
-			"silence_warn_seconds":          1,
-			"silence_kill_seconds":          3,
-			"long_command_silence_seconds":  30,
+			"silence_warn_seconds":         1,
+			"silence_kill_seconds":         3,
+			"long_command_silence_seconds": 30,
 		},
 	}
 
@@ -999,9 +1003,9 @@ func TestLongCommandEndResumesNormalThreshold(t *testing.T) {
 		GraceSec:    1,
 		TimeoutSec:  30,
 		EngineOpts: map[string]any{
-			"silence_warn_seconds":          1,
-			"silence_kill_seconds":          3,
-			"long_command_silence_seconds":  30,
+			"silence_warn_seconds":         1,
+			"silence_kill_seconds":         3,
+			"long_command_silence_seconds": 30,
 		},
 	}
 
@@ -1078,5 +1082,179 @@ func TestStdinNudgeOnFrozenWarning(t *testing.T) {
 	}
 	if !strings.Contains(events, "frozen_warning") {
 		t.Fatalf("event stream missing frozen_warning event; got:\n%s", events)
+	}
+}
+
+func TestSoftSteerFIFOInjectsWithoutResume(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO steering is Unix-only")
+	}
+
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:fifo-live'",
+		"read -t 10 line",
+		"case \"$line\" in",
+		"  *'Note from coordinator: FIFO nudge message'*) echo 'RESPONSE:fifo-live-ok' ;;",
+		"  *) echo \"RESPONSE:unexpected:$line\" ;;",
+		"esac",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+
+	spec := testDispatchSpec(artifactDir)
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+	engine.SetStreamMode(event.StreamNormal)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	type dispatchOutcome struct {
+		result *types.DispatchResult
+		err    error
+	}
+	outcomeCh := make(chan dispatchOutcome, 1)
+	go func() {
+		result, err := engine.Dispatch(ctx, spec)
+		outcomeCh <- dispatchOutcome{result: result, err: err}
+	}()
+
+	waitForPath(t, fifo.Path(artifactDir))
+	writeSoftSteerFIFO(t, artifactDir, "nudge", "FIFO nudge message")
+
+	select {
+	case outcome := <-outcomeCh:
+		if outcome.err != nil {
+			t.Fatalf("Dispatch: %v", outcome.err)
+		}
+		if outcome.result.Status != types.StatusCompleted {
+			t.Fatalf("status = %q, want completed; error = %+v", outcome.result.Status, outcome.result.Error)
+		}
+		if outcome.result.Response != "fifo-live-ok" {
+			t.Fatalf("response = %q, want fifo-live-ok", outcome.result.Response)
+		}
+	case <-ctx.Done():
+		t.Fatal("dispatch timed out")
+	}
+
+	if got := len(adapter.Calls()); got != 0 {
+		t.Fatalf("resume calls = %d, want 0", got)
+	}
+	if !strings.Contains(eventBuf.String(), "coordinator_inject") {
+		t.Fatalf("event stream missing coordinator_inject; got:\n%s", eventBuf.String())
+	}
+}
+
+func TestSoftSteerFIFODeferredUntilToolEnd(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO steering is Unix-only")
+	}
+
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:fifo-deferred'",
+		"echo 'TOOL_START:long running tool'",
+		"sleep 1",
+		"echo 'TOOL_END:command_execution'",
+		"read -t 10 line",
+		"case \"$line\" in",
+		"  *'Note from coordinator: deferred message'*) echo 'RESPONSE:deferred-ok' ;;",
+		"  *) echo \"RESPONSE:unexpected:$line\" ;;",
+		"esac",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+
+	spec := testDispatchSpec(artifactDir)
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+	engine.SetStreamMode(event.StreamNormal)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	type dispatchOutcome struct {
+		result *types.DispatchResult
+		err    error
+	}
+	outcomeCh := make(chan dispatchOutcome, 1)
+	go func() {
+		result, err := engine.Dispatch(ctx, spec)
+		outcomeCh <- dispatchOutcome{result: result, err: err}
+	}()
+
+	waitForPath(t, fifo.Path(artifactDir))
+	time.Sleep(150 * time.Millisecond)
+	writeSoftSteerFIFO(t, artifactDir, "nudge", "deferred message")
+
+	select {
+	case outcome := <-outcomeCh:
+		if outcome.err != nil {
+			t.Fatalf("Dispatch: %v", outcome.err)
+		}
+		if outcome.result.Status != types.StatusCompleted {
+			t.Fatalf("status = %q, want completed; error = %+v", outcome.result.Status, outcome.result.Error)
+		}
+		if outcome.result.Response != "deferred-ok" {
+			t.Fatalf("response = %q, want deferred-ok", outcome.result.Response)
+		}
+	case <-ctx.Done():
+		t.Fatal("dispatch timed out")
+	}
+
+	if got := len(adapter.Calls()); got != 0 {
+		t.Fatalf("resume calls = %d, want 0", got)
+	}
+	events := eventBuf.String()
+	if !strings.Contains(events, "steer_deferred") {
+		t.Fatalf("event stream missing steer_deferred; got:\n%s", events)
+	}
+	if !strings.Contains(events, "tool_active: deferring stdin steer") {
+		t.Fatalf("event stream missing deferred stdin steer message; got:\n%s", events)
+	}
+}
+
+func TestSoftSteerFIFOCleanupRemovesPipe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("FIFO steering is Unix-only")
+	}
+
+	artifactDir := t.TempDir()
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:fifo-cleanup'",
+		"echo 'RESPONSE:done'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, testDispatchSpec(artifactDir))
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+
+	if _, err := os.Stat(fifo.Path(artifactDir)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stdin.pipe stat error = %v, want not exists", err)
+	}
+}
+
+func writeSoftSteerFIFO(t *testing.T, artifactDir, action, message string) {
+	t.Helper()
+
+	payload, err := adapter.EncodeSoftSteerEnvelope(action, message)
+	if err != nil {
+		t.Fatalf("EncodeSoftSteerEnvelope: %v", err)
+	}
+	pipe, err := fifo.OpenWriteNonblock(fifo.Path(artifactDir))
+	if err != nil {
+		t.Fatalf("OpenWriteNonblock(%q): %v", fifo.Path(artifactDir), err)
+	}
+	defer pipe.Close()
+	if _, err := pipe.Write(payload); err != nil {
+		t.Fatalf("write FIFO payload: %v", err)
 	}
 }

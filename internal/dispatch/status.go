@@ -14,13 +14,14 @@ import (
 // LiveStatus represents the current state of a running dispatch,
 // written atomically to status.json in the artifact directory.
 type LiveStatus struct {
-	State        string `json:"state"`
-	ElapsedS     int    `json:"elapsed_s"`
-	LastActivity string `json:"last_activity"`
-	ToolsUsed    int    `json:"tools_used"`
-	FilesChanged int    `json:"files_changed"`
-	Timestamp    string `json:"ts"`
-	DispatchID   string `json:"dispatch_id,omitempty"`
+	State          string `json:"state"`
+	ElapsedS       int    `json:"elapsed_s"`
+	LastActivity   string `json:"last_activity"`
+	ToolsUsed      int    `json:"tools_used"`
+	FilesChanged   int    `json:"files_changed"`
+	StdinPipeReady bool   `json:"stdin_pipe_ready,omitempty"`
+	Timestamp      string `json:"ts"`
+	DispatchID     string `json:"dispatch_id,omitempty"`
 }
 
 const statusFileName = "status.json"

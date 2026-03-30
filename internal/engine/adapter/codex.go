@@ -10,6 +10,11 @@ import (
 
 type CodexAdapter struct{}
 
+type CodexSoftSteerEnvelope struct {
+	Action  string `json:"action"`
+	Message string `json:"message"`
+}
+
 func (a *CodexAdapter) Binary() string {
 	return "codex"
 }
@@ -96,6 +101,38 @@ type codexUsage struct {
 type codexError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+func EncodeSoftSteerEnvelope(action, message string) ([]byte, error) {
+	payload := CodexSoftSteerEnvelope{
+		Action:  strings.TrimSpace(action),
+		Message: message,
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+func DecodeSoftSteerEnvelope(line []byte) (CodexSoftSteerEnvelope, error) {
+	var env CodexSoftSteerEnvelope
+	if err := json.Unmarshal(line, &env); err != nil {
+		return CodexSoftSteerEnvelope{}, err
+	}
+	env.Action = strings.TrimSpace(env.Action)
+	return env, nil
+}
+
+func FormatSoftSteerInput(action, message string) []byte {
+	switch strings.TrimSpace(action) {
+	case "redirect":
+		return []byte("IMPORTANT: The coordinator has redirected your task. Stop your current approach and follow these new instructions instead:\n" + message + "\n")
+	case "nudge":
+		return []byte("Note from coordinator: " + message + "\n")
+	default:
+		return []byte(message + "\n")
+	}
 }
 
 func (a *CodexAdapter) ParseEvent(line string) (*types.HarnessEvent, error) {

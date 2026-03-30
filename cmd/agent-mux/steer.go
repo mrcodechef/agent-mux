@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,8 @@ import (
 	"time"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
+	"github.com/buildoak/agent-mux/internal/engine/adapter"
+	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
@@ -102,18 +105,7 @@ func steerNudge(idPrefix, artifactDir string, rest []string, stdout io.Writer) i
 	if len(rest) > 0 {
 		message = strings.Join(rest, " ")
 	}
-
-	if err := inbox.WriteInbox(artifactDir, "[NUDGE] "+message); err != nil {
-		return emitSteerError(stdout, 1, "write_failed",
-			fmt.Sprintf("write inbox: %v", err), "")
-	}
-
-	writeCompactJSON(stdout, map[string]any{
-		"action":      "nudge",
-		"dispatch_id": idPrefix,
-		"delivered":   true,
-	})
-	return 0
+	return deliverSteer(idPrefix, artifactDir, "nudge", message, stdout)
 }
 
 func steerRedirect(idPrefix, artifactDir string, rest []string, stdout io.Writer) int {
@@ -124,17 +116,7 @@ func steerRedirect(idPrefix, artifactDir string, rest []string, stdout io.Writer
 	}
 
 	message := strings.Join(rest, " ")
-	if err := inbox.WriteInbox(artifactDir, "[REDIRECT] "+message); err != nil {
-		return emitSteerError(stdout, 1, "write_failed",
-			fmt.Sprintf("write inbox: %v", err), "")
-	}
-
-	writeCompactJSON(stdout, map[string]any{
-		"action":      "redirect",
-		"dispatch_id": idPrefix,
-		"delivered":   true,
-	})
-	return 0
+	return deliverSteer(idPrefix, artifactDir, "redirect", message, stdout)
 }
 
 func steerExtend(idPrefix, artifactDir string, rest []string, stdout io.Writer) int {
@@ -249,4 +231,74 @@ func emitSteerError(stdout io.Writer, exitCode int, code, message, suggestion st
 		"error": dispatch.NewDispatchError(code, message, suggestion),
 	})
 	return exitCode
+}
+
+func deliverSteer(idPrefix, artifactDir, action, message string, stdout io.Writer) int {
+	mechanism, delivered, err := tryFIFOInject(artifactDir, action, message)
+	if err == nil && delivered {
+		writeCompactJSON(stdout, map[string]any{
+			"action":      action,
+			"dispatch_id": idPrefix,
+			"mechanism":   mechanism,
+			"delivered":   true,
+		})
+		return 0
+	}
+
+	if err := writeInboxSteer(artifactDir, action, message); err != nil {
+		return emitSteerError(stdout, 1, "write_failed",
+			fmt.Sprintf("write inbox: %v", err), "")
+	}
+	writeCompactJSON(stdout, map[string]any{
+		"action":      action,
+		"dispatch_id": idPrefix,
+		"mechanism":   "inbox",
+		"delivered":   true,
+	})
+	return 0
+}
+
+func tryFIFOInject(artifactDir, action, message string) (mechanism string, delivered bool, err error) {
+	meta, err := dispatch.ReadDispatchMeta(artifactDir)
+	if err != nil || meta == nil || meta.Engine != "codex" {
+		return "", false, err
+	}
+	status, err := dispatch.ReadStatusJSON(artifactDir)
+	if err != nil || status == nil || status.State != "running" || !status.StdinPipeReady {
+		return "", false, err
+	}
+	pid, err := dispatch.ReadHostPID(artifactDir)
+	if err != nil || !dispatch.IsProcessAlive(pid) {
+		return "", false, err
+	}
+	payload, err := adapter.EncodeSoftSteerEnvelope(action, message)
+	if err != nil {
+		return "", false, err
+	}
+	pipe, err := fifo.OpenWriteNonblock(fifo.Path(artifactDir))
+	if err != nil {
+		if errors.Is(err, fifo.ErrUnsupported) || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENXIO) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	defer pipe.Close()
+	if _, err := pipe.Write(payload); err != nil {
+		if errors.Is(err, syscall.EPIPE) || errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return "stdin_fifo", true, nil
+}
+
+func writeInboxSteer(artifactDir, action, message string) error {
+	switch action {
+	case "redirect":
+		return inbox.WriteInbox(artifactDir, "[REDIRECT] "+message)
+	case "nudge":
+		return inbox.WriteInbox(artifactDir, "[NUDGE] "+message)
+	default:
+		return inbox.WriteInbox(artifactDir, message)
+	}
 }
