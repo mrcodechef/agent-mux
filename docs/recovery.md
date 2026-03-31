@@ -69,7 +69,7 @@ Priority chain (highest wins): step-level `timeout` > role-level `timeout` > `Ti
 **Phase 2 — Hard timeout:**
 
 1. Set terminal state to `timed_out`
-2. `GracefulStop(5)` — SIGTERM to process group, then SIGKILL after 5 seconds
+2. `GracefulStop(spec.GraceSec)` — SIGTERM to process group, then SIGKILL after `grace_sec` seconds (minimum 10s). `grace_sec` is sourced from the dispatch spec, role, or `[timeout].grace` config key.
 3. Drain remaining events from scanner
 
 If the harness exits cleanly during the grace period (it read the inbox and wrapped up on its own), the result routes to the normal success path — `completed`, not `timed_out`.
@@ -78,10 +78,12 @@ If the harness exits cleanly during the grace period (it read the inbox and wrap
 
 On any terminal state, the result captures:
 
-- `Response`: `lastResponse` text, or `lastProgressText` if response is empty
+- `Response`: `lastResponse` text, or `lastProgressText` if response is empty. This applies to all terminal states including `failed` — accumulated response is never discarded on the error path.
 - `Artifacts`: output of `ScanArtifacts()` walking the artifact directory
 - `Partial: true` when the worker was interrupted
 - `Recoverable: true` when the dispatch can be continued with `--recover`
+
+Store records are written atomically (tmp file + fsync + rename) before the terminal status event is emitted. If the store write fails, a warning is logged and the response is persisted to `full_output.md` in the artifact directory as a fallback.
 
 ## Liveness Watchdog
 

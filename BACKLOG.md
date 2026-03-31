@@ -409,3 +409,13 @@ All items include session ID where the work was done.
 | B-6: write-before-ack race | 3.2.1 | `coordinator` | Fsync host.pid + status.json before async ack emission |
 | B-7: `result --json` status field | 3.2.1 | `coordinator` | enrichResultStatus() + kill_reason from events.jsonl |
 | F-11: Codex soft stdin steering via named pipe | 3.2.0 | `1daaa1d6` | Commit `079b41a`. Protocol layer on F-6 plumbing — structured steering envelopes, tool-boundary-aware deferred delivery, state machine for steer vs. abort. |
+| FM-7: process exit race (final EventResponse lost) | 3.2.2 | `coordinator` (2026-03-31) | Commit `6342c92`. Second drain pass after streamDone captures events emitted between last scanner read and process exit. |
+| FM-4: hard timeout grace hardcoded to 5s | 3.2.2 | `coordinator` (2026-03-31) | Commit `6342c92`. GracefulStop now uses spec.GraceSec (floored at 10s). |
+| FM-9: failed dispatches discarded accumulated response | 3.2.2 | `coordinator` (2026-03-31) | Commit `6342c92`. BuildFailedResult now preserves lastResponse/lastProgressText. Auditor pass (`04a6a18`): meta-write failure path also preserves partial response. |
+| FM-15: status written before store record | 3.2.2 | `coordinator` (2026-03-31) | Commit `6342c92`. store.WriteResult completes before terminal status event is emitted. Auditor pass (`04a6a18`): store errors logged + fallback to full_output.md. |
+| FM-8: non-atomic store.WriteResult | 3.2.2 | `coordinator` (2026-03-31) | Commit `6342c92`. Result records written via os.CreateTemp + fsync + rename. Auditor pass (`04a6a18`): unique temp files via os.CreateTemp (no fixed suffix). |
+| Codex sandbox value validation | 3.2.2 | `coordinator` (2026-03-31) | Commit `6539644`. Whitelist: danger-full-access, workspace-write, read-only. Unknown values return structured error. |
+| bufio scanner overflow graceful handling | 3.2.2 | `coordinator` (2026-03-31) | Commit `6539644`. Buffer raised 1MB→4MB; ErrTooLong detected and handled gracefully (line skipped with warning event). |
+| ax-eval promoted to repo root | 3.2.2 | `coordinator` (2026-03-31) | Commit `4799d5e`. ax-eval/MANIFEST.md + ax-eval/PROTOCOL.md at repo root. Not a skill. |
+| SKILL.md: artifact-dir escaping, flag syntax, sandbox anti-patterns | 3.2.2 | `coordinator` (2026-03-31) | Commit `c6178b0`. Three new reference sections in skill/SKILL.md. |
+| Remove phantom --network flag from skill docs | 3.2.2 | `coordinator` (2026-03-31) | Commit `e4403f7`. Flag never existed in the binary; removed from docs. |

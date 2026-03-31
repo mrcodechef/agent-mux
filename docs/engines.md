@@ -79,6 +79,8 @@ Codex does not use `--permission-mode` directly. The adapter resolves the sandbo
 | sandbox is `danger-full-access` and `spec.FullAccess == false` | `-s danger-full-access` |
 | any other sandbox value | `-s <sandbox>` |
 If no sandbox option is present, the default base value is `danger-full-access`.
+
+`sandbox` values are validated against a whitelist (`danger-full-access`, `workspace-write`, `read-only`) before the adapter is invoked. An unrecognized value causes a structured dispatch error rather than passing an unknown flag to the CLI.
 ### Event Parsing
 Codex emits NDJSON under `--json`. The adapter recognizes these main event families:
 - `thread.started` -> session start

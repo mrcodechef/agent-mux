@@ -259,7 +259,9 @@ The engine loop handles four terminal outcomes:
 - failed
 - interrupted
 
-Each terminal path writes status, updates `_dispatch_meta.json`, persists the store record, and keeps artifact discovery on the result. The only difference is which `dispatch.Build*Result` constructor is used and what error payload, if any, is attached.
+Each terminal path writes status, updates `_dispatch_meta.json`, persists the store record, and keeps artifact discovery on the result. The only difference is which `dispatch.Build*Result` constructor is used and what error payload, if any, is attached. Store records are written via tmp-file + fsync + rename before the terminal status event is emitted to prevent observers from reading a status ahead of a queryable record.
+
+After the waiter goroutine signals process exit (`streamDone`), the loop performs a second drain pass on the scanner channel. This catches `EventResponse` and other events that were emitted between the last scanner read and process exit — a narrow race on clean harness exits that previously caused the final response to be silently dropped.
 
 Soft timeout is not immediate process death. On soft timeout, the loop writes a wrap-up message into the inbox and opens a hard-timeout timer for the grace period. That allows the harness to summarize and flush artifacts before the process group is stopped.
 
