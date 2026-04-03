@@ -24,7 +24,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/hooks"
-	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
@@ -445,11 +444,11 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	recoverDispatchID := req.RecoverDispatchID
 	if recoverDispatchID != "" {
-		recoveryCtx, err := recovery.RecoverDispatch(recoverDispatchID)
+		recoveryCtx, err := dispatch.RecoverDispatch(recoverDispatchID)
 		if err != nil {
 			return emitFailureResult(stdout, spec, 1, "recovery_failed", err.Error(), "")
 		}
-		spec.Prompt = recovery.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
+		spec.Prompt = dispatch.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
 	}
 
 	hookEval := hooks.NewEvaluator(cfg.Hooks)
@@ -871,7 +870,7 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 
 	spec.ArtifactDir = strings.TrimSpace(spec.ArtifactDir)
 	if spec.ArtifactDir == "" {
-		artifactDir, err := recovery.DefaultArtifactDir(spec.DispatchID)
+		artifactDir, err := dispatch.DefaultArtifactDir(spec.DispatchID)
 		if err != nil {
 			return fmt.Errorf("default artifact dir for dispatch %q: %w", spec.DispatchID, err)
 		}
@@ -1036,7 +1035,7 @@ func buildPreviewResult(req *dispatchRequest, confirmationRequired bool) preview
 		},
 		Prompt: previewPromptFrom(spec),
 		Control: previewControl{
-			ControlRecord: recovery.ControlRecordPath(spec.DispatchID),
+			ControlRecord: dispatch.ControlRecordPath(spec.DispatchID),
 			ArtifactDir:   spec.ArtifactDir,
 		},
 		PromptPreamble:       dispatch.PromptPreamble(spec),
@@ -1244,7 +1243,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error)
 
 	artifactDir := flags.artifactDir
 	if artifactDir == "" {
-		artifactDirPath, err := recovery.DefaultArtifactDir(dispatchID)
+		artifactDirPath, err := dispatch.DefaultArtifactDir(dispatchID)
 		if err != nil {
 			return nil, fmt.Errorf("default artifact dir for dispatch %q: %w", dispatchID, err)
 		}
@@ -1413,7 +1412,7 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 			0,
 		), nil
 	}
-	if err := recovery.RegisterDispatchSpec(spec); err != nil {
+	if err := dispatch.RegisterDispatchSpec(spec); err != nil {
 		return dispatch.BuildFailedResult(
 			spec,
 			"",

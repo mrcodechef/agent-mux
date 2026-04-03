@@ -10,7 +10,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/hooks"
-	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -27,7 +26,7 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, annotations
 	}
 
 	// Register control record so ax status/result can resolve the dispatch ID.
-	if err := recovery.RegisterDispatchSpec(spec); err != nil {
+	if err := dispatch.RegisterDispatchSpec(spec); err != nil {
 		return emitFailureResult(stdout, spec, 1, "config_error",
 			fmt.Sprintf("Register control path for dispatch %q: %v", spec.DispatchID, err),
 			"Ensure the control path is writable.")

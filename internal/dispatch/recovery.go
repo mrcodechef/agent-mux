@@ -1,4 +1,4 @@
-package recovery
+package dispatch
 
 import (
 	"fmt"
@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -15,7 +14,7 @@ const legacyArtifactRoot = "/tmp/agent-mux"
 
 type RecoveryContext struct {
 	DispatchID   string
-	OriginalMeta *dispatch.DispatchMeta
+	OriginalMeta *DispatchMeta
 	Artifacts    []string
 	ArtifactDir  string
 }
@@ -49,7 +48,7 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 		return "", err
 	}
 
-	if meta, err := dispatch.ReadPersistentMeta(dispatchID); err == nil {
+	if meta, err := ReadPersistentMeta(dispatchID); err == nil {
 		if artifactDir := strings.TrimSpace(meta.ArtifactDir); artifactDir != "" {
 			return filepath.Clean(artifactDir), nil
 		}
@@ -79,7 +78,7 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 }
 
 func ResolveControlRecord(ref string) (*ControlRecord, error) {
-	record, err := dispatch.FindDispatchRecordByRef(ref)
+	record, err := FindDispatchRecordByRef(ref)
 	if err != nil || record == nil {
 		return nil, err
 	}
@@ -106,10 +105,10 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 		return nil, fmt.Errorf("artifact path %q is not a directory", dir)
 	}
 
-	meta, err := dispatch.ReadDispatchMeta(dir)
+	meta, err := ReadDispatchMeta(dir)
 	if err != nil {
-		if persistentMeta, persistentErr := dispatch.ReadPersistentMeta(dispatchID); persistentErr == nil {
-			meta = &dispatch.DispatchMeta{
+		if persistentMeta, persistentErr := ReadPersistentMeta(dispatchID); persistentErr == nil {
+			meta = &DispatchMeta{
 				DispatchID: persistentMeta.DispatchID,
 				SessionID:  persistentMeta.SessionID,
 				StartedAt:  persistentMeta.StartedAt,
@@ -126,7 +125,7 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 	return &RecoveryContext{
 		DispatchID:   dispatchID,
 		OriginalMeta: meta,
-		Artifacts:    dispatch.ScanArtifacts(dir),
+		Artifacts:    ScanArtifacts(dir),
 		ArtifactDir:  dir,
 	}, nil
 }
@@ -136,9 +135,9 @@ func currentArtifactRoot() string {
 }
 
 func ControlRecordPath(dispatchID string) string {
-	dir, err := dispatch.DispatchDir(strings.TrimSpace(dispatchID))
+	dir, err := DispatchDir(strings.TrimSpace(dispatchID))
 	if err != nil {
-		root := dispatch.DispatchesDir()
+		root := DispatchesDir()
 		return filepath.Join(root, strings.TrimSpace(dispatchID), "meta.json")
 	}
 	return filepath.Join(dir, "meta.json")
@@ -182,7 +181,7 @@ func registerDispatchMeta(spec *types.DispatchSpec) error {
 	}
 	specCopy := *spec
 	specCopy.ArtifactDir = filepath.Clean(artifactDirAbs)
-	return dispatch.WritePersistentMeta(&specCopy, types.DispatchAnnotations{})
+	return WritePersistentMeta(&specCopy, types.DispatchAnnotations{})
 }
 
 func BuildRecoveryPrompt(ctx *RecoveryContext, additionalInstruction string) string {

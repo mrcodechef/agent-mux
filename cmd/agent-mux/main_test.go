@@ -17,7 +17,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/hooks"
-	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -353,7 +352,7 @@ func TestResultCommandFallsBackToLegacyFullOutput(t *testing.T) {
 	record := testStoreRecord("01KMT4E7BBNN1KQEC8MYJRW5H5", "completed")
 	writeStoreRecord(t, record, "", false)
 
-	artifactDir, err := recovery.DefaultArtifactDir(record.ID)
+	artifactDir, err := dispatch.DefaultArtifactDir(record.ID)
 	if err != nil {
 		t.Fatalf("DefaultArtifactDir: %v", err)
 	}
@@ -431,8 +430,8 @@ func TestPreviewCommandOutputsResolvedJSONShape(t *testing.T) {
 	if preview.ResultMetadata.Profile != "planner" {
 		t.Fatalf("result_metadata.profile = %q, want planner", preview.ResultMetadata.Profile)
 	}
-	if preview.Control.ControlRecord != recovery.ControlRecordPath(preview.DispatchSpec.DispatchID) {
-		t.Fatalf("control_record = %q, want %q", preview.Control.ControlRecord, recovery.ControlRecordPath(preview.DispatchSpec.DispatchID))
+	if preview.Control.ControlRecord != dispatch.ControlRecordPath(preview.DispatchSpec.DispatchID) {
+		t.Fatalf("control_record = %q, want %q", preview.Control.ControlRecord, dispatch.ControlRecordPath(preview.DispatchSpec.DispatchID))
 	}
 	if preview.Control.ArtifactDir != artifactDir {
 		t.Fatalf("control.artifact_dir = %q, want %q", preview.Control.ArtifactDir, artifactDir)
@@ -779,7 +778,7 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if spec.GraceSec != 60 {
 		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
 	}
-	wantArtifactDirPath, err := recovery.DefaultArtifactDir(spec.DispatchID)
+	wantArtifactDirPath, err := dispatch.DefaultArtifactDir(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("DefaultArtifactDir: %v", err)
 	}
@@ -1366,7 +1365,7 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	if specCwdReal != workingDirReal {
 		t.Fatalf("cwd = %q (%q), want %q (%q)", spec.Cwd, specCwdReal, workingDir, workingDirReal)
 	}
-	defaultArtifactDir, err := recovery.DefaultArtifactDir(spec.DispatchID)
+	defaultArtifactDir, err := dispatch.DefaultArtifactDir(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("DefaultArtifactDir: %v", err)
 	}
@@ -1584,7 +1583,7 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	relativeArtifactDir := filepath.Join("artifacts", "custom-dispatch")
 	absoluteArtifactDir := filepath.Join(startDir, relativeArtifactDir)
 	t.Cleanup(func() {
-		_ = os.Remove(recovery.ControlRecordPath(dispatchID))
+		_ = os.Remove(dispatch.ControlRecordPath(dispatchID))
 	})
 	input := map[string]any{
 		"dispatch_id":  dispatchID,
@@ -2026,7 +2025,7 @@ func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response str
 }
 
 func testStoreRecord(id, status string) dispatch.DispatchRecord {
-	artifactDir, err := recovery.DefaultArtifactDir(id)
+	artifactDir, err := dispatch.DefaultArtifactDir(id)
 	if err != nil {
 		panic(err)
 	}
@@ -2143,11 +2142,11 @@ func prepareSteerDispatchFixture(t *testing.T, stdinPipeReady bool) (string, str
 	if err := os.WriteFile(filepath.Join(artifactDir, "host.pid"), []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o644); err != nil {
 		t.Fatalf("write host.pid: %v", err)
 	}
-	if err := recovery.RegisterDispatch(dispatchID, artifactDir); err != nil {
+	if err := dispatch.RegisterDispatch(dispatchID, artifactDir); err != nil {
 		t.Fatalf("RegisterDispatch: %v", err)
 	}
 	t.Cleanup(func() {
-		_ = os.Remove(recovery.ControlRecordPath(dispatchID))
+		_ = os.Remove(dispatch.ControlRecordPath(dispatchID))
 	})
 	return dispatchID, artifactDir
 }

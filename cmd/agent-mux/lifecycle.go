@@ -16,7 +16,6 @@ import (
 
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
-	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 )
 
@@ -214,7 +213,7 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		if record != nil && strings.TrimSpace(record.ArtifactDir) != "" {
 			artifactDir = record.ArtifactDir
 		} else {
-			resolved, resolveErr := recovery.ResolveArtifactDir(dispatchID)
+			resolved, resolveErr := dispatch.ResolveArtifactDir(dispatchID)
 			if resolveErr != nil {
 				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no artifact directory found for dispatch %q: %v", dispatchID, resolveErr), "")
 			}
@@ -404,7 +403,7 @@ func dashIfEmpty(value string) string {
 }
 
 func legacyFullOutputPath(dispatchID string) (string, error) {
-	artifactDir, err := recovery.DefaultArtifactDir(dispatchID)
+	artifactDir, err := dispatch.DefaultArtifactDir(dispatchID)
 	if err != nil {
 		return "", err
 	}
@@ -476,7 +475,7 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 	// Resolve artifact directory and list contents.
 	artifactDir := record.ArtifactDir
 	if strings.TrimSpace(artifactDir) == "" {
-		if resolved, resolveErr := recovery.ResolveArtifactDir(dispatchID); resolveErr == nil {
+		if resolved, resolveErr := dispatch.ResolveArtifactDir(dispatchID); resolveErr == nil {
 			artifactDir = resolved
 		}
 	}
@@ -581,7 +580,7 @@ func showResult(dispatchID string, record *dispatch.DispatchRecord, jsonOutput, 
 		if record != nil && strings.TrimSpace(record.ArtifactDir) != "" {
 			artifactDir = record.ArtifactDir
 		} else {
-			resolved, resolveErr := recovery.ResolveArtifactDir(dispatchID)
+			resolved, resolveErr := dispatch.ResolveArtifactDir(dispatchID)
 			if resolveErr != nil {
 				return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no artifact directory found for dispatch %q: %v", dispatchID, resolveErr), "")
 			}
@@ -779,7 +778,7 @@ func enrichResultStatus(result map[string]any, record *dispatch.DispatchRecord, 
 		artifactDir = record.ArtifactDir
 	}
 	if strings.TrimSpace(artifactDir) == "" {
-		if resolved, err := recovery.ResolveArtifactDir(dispatchID); err == nil {
+		if resolved, err := dispatch.ResolveArtifactDir(dispatchID); err == nil {
 			artifactDir = resolved
 		}
 	}

@@ -1,4 +1,4 @@
-package recovery
+package dispatch
 
 import (
 	"os"
@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -37,10 +36,10 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 		Prompt:      "recover test",
 	}
 
-	if err := dispatch.WriteDispatchMeta(artifactDir, spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
+	if err := WriteDispatchMeta(artifactDir, spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
 		t.Fatalf("WriteDispatchMeta: %v", err)
 	}
-	if err := dispatch.WritePersistentMeta(spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
+	if err := WritePersistentMeta(spec, types.DispatchAnnotations{Role: "worker"}); err != nil {
 		t.Fatalf("WritePersistentMeta: %v", err)
 	}
 	artifactPath := filepath.Join(artifactDir, "notes.txt")
@@ -82,7 +81,7 @@ func TestRegisterDispatchSpecPersistsMetadata(t *testing.T) {
 		t.Fatalf("RegisterDispatchSpec: %v", err)
 	}
 
-	meta, err := dispatch.ReadPersistentMeta(spec.DispatchID)
+	meta, err := ReadPersistentMeta(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadPersistentMeta: %v", err)
 	}
@@ -159,7 +158,7 @@ func TestResolveArtifactDirRejectsInvalidDispatchID(t *testing.T) {
 func TestBuildRecoveryPrompt_ContainsDispatchID(t *testing.T) {
 	ctx := &RecoveryContext{
 		DispatchID: "abc123",
-		OriginalMeta: &dispatch.DispatchMeta{
+		OriginalMeta: &DispatchMeta{
 			Status:     "timed_out",
 			PromptHash: "sha256:1234",
 		},

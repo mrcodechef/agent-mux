@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
-	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 )
 
@@ -26,7 +25,7 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 	if err != nil {
 		return nil, err
 	}
-	controlRecord, err := recovery.ResolveControlRecord(ref)
+	controlRecord, err := dispatch.ResolveControlRecord(ref)
 	if err != nil {
 		return nil, err
 	}
@@ -45,7 +44,7 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 		resolved.ArtifactDir = firstNonEmptyString(controlRecord.ArtifactDir, resolved.ArtifactDir)
 	}
 	if resolved.DispatchID == "" && record == nil && controlRecord == nil {
-		if artifactDir, err := recovery.ResolveArtifactDir(ref); err == nil {
+		if artifactDir, err := dispatch.ResolveArtifactDir(ref); err == nil {
 			resolved.DispatchID = ref
 			resolved.ArtifactDir = artifactDir
 		}
@@ -54,7 +53,7 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 		return nil, fmt.Errorf("no dispatch found for reference %q", ref)
 	}
 	if resolved.ArtifactDir == "" {
-		if artifactDir, err := recovery.ResolveArtifactDir(resolved.DispatchID); err == nil {
+		if artifactDir, err := dispatch.ResolveArtifactDir(resolved.DispatchID); err == nil {
 			resolved.ArtifactDir = artifactDir
 		}
 	}
