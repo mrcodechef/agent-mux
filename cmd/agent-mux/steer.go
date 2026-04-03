@@ -21,16 +21,20 @@ import (
 
 const defaultNudgeMessage = "Please wrap up your current work and provide a final summary."
 
-func runSteerCommand(args []string, stdout io.Writer) int {
+func runSteerCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 2 {
 		return emitSteerError(stdout, 2, "invalid_args",
 			"steer requires: <dispatch_id> <action> [message/value]",
-			"Actions: abort, nudge, redirect, extend, status")
+			"Actions: abort, nudge, redirect, extend")
 	}
 
 	ref := strings.TrimSpace(args[0])
 	action := strings.TrimSpace(args[1])
 	rest := args[2:]
+
+	if action == "status" {
+		return steerStatusCompatibility(ref, rest, stdout, stderr)
+	}
 
 	resolved, err := resolveDispatchReference(ref)
 	if err != nil {
@@ -58,12 +62,10 @@ func runSteerCommand(args []string, stdout io.Writer) int {
 		return steerRedirect(dispatchID, artifactDir, rest, stdout)
 	case "extend":
 		return steerExtend(dispatchID, artifactDir, rest, stdout)
-	case "status":
-		return steerStatus(dispatchID, artifactDir, stdout)
 	default:
 		return emitSteerError(stdout, 2, "invalid_args",
 			fmt.Sprintf("unknown steer action %q", action),
-			"Actions: abort, nudge, redirect, extend, status")
+			"Actions: abort, nudge, redirect, extend")
 	}
 }
 
@@ -154,23 +156,16 @@ func steerExtend(idPrefix, artifactDir string, rest []string, stdout io.Writer) 
 	return 0
 }
 
-func steerStatus(idPrefix, artifactDir string, stdout io.Writer) int {
-	liveStatus, err := dispatch.ReadStatusJSON(artifactDir)
-	if err != nil {
-		return emitSteerError(stdout, 1, "not_found",
-			fmt.Sprintf("no status found for dispatch %q", idPrefix), "")
+func steerStatusCompatibility(ref string, rest []string, stdout, stderr io.Writer) int {
+	if len(rest) != 0 {
+		return emitSteerError(stdout, 2, "invalid_args",
+			"status does not accept additional arguments",
+			"Use `agent-mux status --json <id>`.")
 	}
-
-	// Check host process liveness.
-	if liveStatus.State == "running" {
-		pid, pidErr := dispatch.ReadHostPID(artifactDir)
-		if pidErr == nil && !dispatch.IsProcessAlive(pid) {
-			liveStatus.State = "orphaned"
-		}
+	if stderr != nil {
+		_, _ = fmt.Fprintln(stderr, "warning: `agent-mux steer <id> status` is deprecated; use `agent-mux status --json <id>`")
 	}
-
-	writeCompactJSON(stdout, liveStatus)
-	return 0
+	return runStatusCommand([]string{"--json", ref}, stdout)
 }
 
 // --- control file types and I/O ---

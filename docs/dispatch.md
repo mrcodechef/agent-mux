@@ -245,6 +245,9 @@ agent-mux preview --engine codex --cwd . "Explain what you would change"
 
 | Invocation pattern | Mode |
 | --- | --- |
+| `agent-mux` | top-level help |
+| `agent-mux help` | top-level help |
+| `agent-mux --help` | top-level help |
 | `agent-mux [flags] <prompt>` | dispatch |
 | `agent-mux dispatch [flags] <prompt>` | dispatch |
 | `agent-mux preview [flags] <prompt>` | preview |
@@ -256,6 +259,7 @@ agent-mux preview --engine codex --cwd . "Explain what you would change"
 | `agent-mux list`, `status`, `result`, `inspect`, `gc` | lifecycle |
 | `agent-mux --async [flags] <prompt>` or `agent-mux wait <dispatch_id>` | async |
 | `agent-mux steer <dispatch_id> <action> [args]` | steer |
+| `agent-mux -- help` | dispatch literal prompt `help` |
 
 ## Exit Codes
 

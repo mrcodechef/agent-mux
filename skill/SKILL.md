@@ -36,7 +36,7 @@ agent-mux -R=scout --async -C=/repo "Find all deprecated API usages" 2>/dev/null
 # -> {"kind":"async_started","dispatch_id":"01KMY...","salt":"fair-elk-one","artifact_dir":"/tmp/agent-mux/01KMY..."}
 
 # WAIT — blocks until terminal state. THE completion primitive.
-# NEVER poll `steer status` in a loop — use wait instead.
+# NEVER poll `status --json` in a loop — use wait instead.
 agent-mux wait --poll 30s <id> 2>/dev/null
 
 # COLLECT — structured JSON result
@@ -44,7 +44,7 @@ agent-mux result <id> --json 2>/dev/null
 # -> {"status":"completed","response":"...","activity":{"files_changed":[...]}}
 
 # LIVE CHECK — one-off, not a loop. For "is it still alive?" moments only.
-agent-mux steer <id> status 2>/dev/null
+agent-mux status --json <id> 2>/dev/null
 
 # POST-MORTEM — after completion. Role, engine, duration, response, artifacts.
 agent-mux inspect <id> 2>/dev/null
@@ -241,7 +241,7 @@ Roles set their own timeouts. Check with `agent-mux config roles`.
 - **Wrapper timeout == worker timeout.** Add 60s slack.
 - **Ignoring `status` field.** `timed_out` is not `completed`.
 - **Synchronous dispatch from Claude Code coordinators.** Use `--async`.
-- **Polling `steer status` in a loop for completion.** Use `wait`.
+- **Polling `status --json` in a loop for completion.** Use `wait`.
 - **Space-separated string flags.** `-context-file /path` can eat adjacent
   flags. Always use `=`: `-context-file=/path`.
 - **Flags after positional args.** `wait <id> --poll 30s` silently ignores

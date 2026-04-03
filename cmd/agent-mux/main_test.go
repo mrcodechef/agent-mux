@@ -95,8 +95,88 @@ func TestHelpFlagReturnsJSON(t *testing.T) {
 	if !ok {
 		t.Fatalf("usage = %#v, want string", raw["usage"])
 	}
-	if !strings.Contains(usage, "Usage of agent-mux") {
-		t.Fatalf("usage = %q, want usage text", usage)
+	if !strings.Contains(usage, "Usage:\n  agent-mux [flags] <prompt>") {
+		t.Fatalf("usage = %q, want curated usage text", usage)
+	}
+	if !strings.Contains(usage, "Literal prompt escape:\n  agent-mux -- help") {
+		t.Fatalf("usage = %q, want literal prompt escape guidance", usage)
+	}
+	if strings.Contains(usage, "Usage of agent-mux") {
+		t.Fatalf("usage = %q, want curated help instead of raw flag output", usage)
+	}
+}
+
+func TestTopLevelHelpSurfacesMatch(t *testing.T) {
+	t.Parallel()
+
+	cases := [][]string{
+		{},
+		{"help"},
+		{"--help"},
+	}
+
+	var expected string
+	for _, args := range cases {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+
+		exitCode := run(args, strings.NewReader(""), &stdout, &stderr)
+		if exitCode != 0 {
+			t.Fatalf("args=%v exit code = %d, want 0; stderr=%q stdout=%q", args, exitCode, stderr.String(), stdout.String())
+		}
+		if stderr.Len() != 0 {
+			t.Fatalf("args=%v stderr = %q, want empty", args, stderr.String())
+		}
+		if expected == "" {
+			expected = stdout.String()
+			continue
+		}
+		if stdout.String() != expected {
+			t.Fatalf("args=%v stdout = %q, want %q", args, stdout.String(), expected)
+		}
+	}
+}
+
+func TestBareHelpHasNoDispatchSideEffects(t *testing.T) {
+	homeDir := t.TempDir()
+	t.Setenv("HOME", homeDir)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, ".agent-mux")); !os.IsNotExist(err) {
+		t.Fatalf(".agent-mux should not exist after help path, stat err=%v", err)
+	}
+}
+
+func TestDoubleDashPreservesLiteralHelpPrompt(t *testing.T) {
+	isolateHome(t)
+	t.Setenv("PATH", t.TempDir())
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"--engine", "codex", "--", "help"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if strings.Contains(stdout.String(), `"kind":"help"`) {
+		t.Fatalf("stdout = %q, want dispatch result instead of help payload", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), `"kind":"preview"`) {
+		t.Fatalf("stderr = %q, want preview JSON from dispatch path", stderr.String())
+	}
+
+	result := decodeResult(t, stdout.Bytes())
+	if result.Error == nil || result.Error.Code != "binary_not_found" {
+		t.Fatalf("error = %#v, want binary_not_found from dispatch attempt", result.Error)
 	}
 }
 
@@ -1881,7 +1961,7 @@ func TestSteerNudgeUsesFIFOWhenReady(t *testing.T) {
 	defer reader.Close()
 
 	var stdout bytes.Buffer
-	exitCode := runSteerCommand([]string{dispatchID, "nudge", "fifo ready"}, &stdout)
+	exitCode := runSteerCommand([]string{dispatchID, "nudge", "fifo ready"}, &stdout, ioDiscard{})
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
 	}
@@ -1901,7 +1981,7 @@ func TestSteerNudgeFallsBackToInboxWhenFIFOUnavailable(t *testing.T) {
 	dispatchID, artifactDir := prepareSteerDispatchFixture(t, false)
 
 	var stdout bytes.Buffer
-	exitCode := runSteerCommand([]string{dispatchID, "nudge", "fallback nudge"}, &stdout)
+	exitCode := runSteerCommand([]string{dispatchID, "nudge", "fallback nudge"}, &stdout, ioDiscard{})
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
 	}
@@ -1931,7 +2011,7 @@ func TestSteerRedirectFIFOWriteErrorsFallbackToInbox(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	exitCode := runSteerCommand([]string{dispatchID, "redirect", "switch focus"}, &stdout)
+	exitCode := runSteerCommand([]string{dispatchID, "redirect", "switch focus"}, &stdout, ioDiscard{})
 	if exitCode != 0 {
 		t.Fatalf("exit code = %d, want 0; stdout=%q", exitCode, stdout.String())
 	}
@@ -1947,6 +2027,59 @@ func TestSteerRedirectFIFOWriteErrorsFallbackToInbox(t *testing.T) {
 	}
 	if len(messages) != 1 || messages[0].Message != "[REDIRECT] switch focus" {
 		t.Fatalf("messages = %#v, want [REDIRECT] switch focus", messages)
+	}
+}
+
+func TestSteerStatusAliasMatchesCanonicalJSONAndWarns(t *testing.T) {
+	dispatchID, _ := prepareSteerDispatchFixture(t, false)
+
+	var statusStdout bytes.Buffer
+	var statusStderr bytes.Buffer
+	statusExit := run([]string{"status", "--json", dispatchID}, strings.NewReader(""), &statusStdout, &statusStderr)
+	if statusExit != 0 {
+		t.Fatalf("status exit code = %d, want 0; stderr=%q stdout=%q", statusExit, statusStderr.String(), statusStdout.String())
+	}
+	if statusStderr.Len() != 0 {
+		t.Fatalf("status stderr = %q, want empty", statusStderr.String())
+	}
+
+	var aliasStdout bytes.Buffer
+	var aliasStderr bytes.Buffer
+	aliasExit := run([]string{"steer", dispatchID, "status"}, strings.NewReader(""), &aliasStdout, &aliasStderr)
+	if aliasExit != 0 {
+		t.Fatalf("alias exit code = %d, want 0; stderr=%q stdout=%q", aliasExit, aliasStderr.String(), aliasStdout.String())
+	}
+	if aliasStdout.String() != statusStdout.String() {
+		t.Fatalf("alias stdout = %q, want canonical status stdout %q", aliasStdout.String(), statusStdout.String())
+	}
+	if !strings.Contains(aliasStderr.String(), "agent-mux status --json <id>") {
+		t.Fatalf("alias stderr = %q, want deprecation warning", aliasStderr.String())
+	}
+}
+
+func TestSteerUsageNoLongerAdvertisesStatus(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	exitCode := run([]string{"steer", "only-id"}, strings.NewReader(""), &stdout, &stderr)
+	if exitCode != 2 {
+		t.Fatalf("exit code = %d, want 2; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", stderr.String())
+	}
+
+	raw := decodeJSONMap(t, stdout.Bytes())
+	errorEnvelope, ok := raw["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("error = %#v, want object", raw["error"])
+	}
+	suggestion, ok := errorEnvelope["suggestion"].(string)
+	if !ok {
+		t.Fatalf("suggestion = %#v, want string", errorEnvelope["suggestion"])
+	}
+	if strings.Contains(suggestion, "status") {
+		t.Fatalf("suggestion = %q, want steer actions without status", suggestion)
 	}
 }
 

@@ -156,6 +156,9 @@ Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for v
 
 | Invocation | Mode |
 | --- | --- |
+| `agent-mux` | top-level help |
+| `agent-mux help` | top-level help |
+| `agent-mux --help` | top-level help |
 | `agent-mux [flags] <prompt>` | dispatch (default) |
 | `agent-mux dispatch [flags] <prompt>` | dispatch (explicit) |
 | `agent-mux preview [flags] <prompt>` | preview |
@@ -172,6 +175,7 @@ Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for v
 | `agent-mux gc [flags]` | lifecycle: garbage collection |
 | `agent-mux wait <id> [flags]` | async: block until done |
 | `agent-mux steer <id> <action> [args]` | steering: mid-flight control |
+| `agent-mux -- help` | dispatch literal prompt `help` |
 
 ## Exit Codes
 

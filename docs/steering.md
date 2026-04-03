@@ -42,6 +42,8 @@ This means the message is injected into the harness conversation as a continuati
 
 `agent-mux steer <dispatch_id> <action> [args]` provides structured control actions.
 
+Live observation is separate: use `agent-mux status [--json] <dispatch_id>` for one-off liveness checks and `agent-mux wait <dispatch_id>` for completion.
+
 ### steer abort
 
 ```bash
@@ -91,10 +93,10 @@ agent-mux steer 01JQXYZ extend 300
 
 Extends the watchdog kill threshold by writing `control.json` with `extend_kill_seconds`. The watchdog reads this file on each tick and applies the extension. Useful when a legitimate long-running operation needs more time than the configured `silence_kill_seconds`.
 
-### steer status
+## Live Status
 
 ```bash
-agent-mux steer 01JQXYZ status
+agent-mux status --json 01JQXYZ
 ```
 
 Reads live status from `status.json` in the artifact directory. Detects orphaned processes where the host PID is dead but the state is still recorded as "running".

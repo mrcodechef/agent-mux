@@ -68,12 +68,12 @@ The artifact directory contains `status.json`, updated on each event boundary:
 `agent-mux steer <dispatch_id> <action> [args]` provides structured control
 over running dispatches.
 
-### steer status
+### Live status
 
 Read live status from `status.json`. Detects orphaned processes.
 
 ```bash
-agent-mux steer 01JQXYZ status
+agent-mux status --json 01JQXYZ
 ```
 
 ### steer abort

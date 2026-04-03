@@ -43,6 +43,7 @@ type cliCommand string
 const (
 	commandDispatch cliCommand = "dispatch"
 	commandPreview  cliCommand = "preview"
+	commandHelp     cliCommand = "help"
 	commandList     cliCommand = "list"
 	commandStatus   cliCommand = "status"
 	commandResult   cliCommand = "result"
@@ -74,7 +75,7 @@ type cliFlags struct {
 	permissionMode, sandbox, reasoning                                                              string
 	pipeline                                                                                        string
 	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
-	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async             bool
+	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async            bool
 	skills, addDirs                                                                                 stringSlice
 }
 
@@ -152,6 +153,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writer, isTerminal terminalChecker) int {
 	command, args, explicitCommand := splitCommand(args)
 	switch command {
+	case commandHelp:
+		return emitTopLevelHelp(stdout)
 	case commandList:
 		return runListCommand(args, stdout)
 	case commandStatus:
@@ -165,7 +168,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	case commandWait:
 		return runWaitCommand(args, stdout, stderr)
 	case commandSteer:
-		return runSteerCommand(args, stdout)
+		return runSteerCommand(args, stdout, stderr)
 	case commandConfig:
 		return runConfigCommand(args, stdout)
 	}
@@ -175,6 +178,9 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	err := fs.Parse(normalizeArgs(args))
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			if !explicitCommand {
+				return emitTopLevelHelp(stdout)
+			}
 			emitResult(stdout, map[string]any{
 				"kind":  "help",
 				"usage": strings.TrimSpace(flagOutput.String()),
@@ -1000,9 +1006,11 @@ func jsonFieldSet(fields map[string]json.RawMessage, name string) bool {
 
 func splitCommand(args []string) (cliCommand, []string, bool) {
 	if len(args) == 0 {
-		return commandDispatch, args, false
+		return commandHelp, args, false
 	}
 	switch args[0] {
+	case string(commandHelp):
+		return commandHelp, args[1:], true
 	case string(commandPreview):
 		return commandPreview, args[1:], true
 	case string(commandDispatch):
