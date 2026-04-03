@@ -43,13 +43,45 @@ func WriteDispatchMeta(artifactDir string, spec *types.DispatchSpec, annotations
 		Cwd:        spec.Cwd,
 	}
 
-	return writeMetaFile(filepath.Join(artifactDir, "_dispatch_meta.json"), &meta)
+	if err := writeMetaFile(filepath.Join(artifactDir, "_dispatch_meta.json"), &meta); err != nil {
+		return err
+	}
+	return WriteDispatchRef(artifactDir, meta.DispatchID)
 }
+
+func WriteDispatchRef(artifactDir, dispatchID string) error {
+	ref := struct {
+		DispatchID string `json:"dispatch_id"`
+		StoreDir   string `json:"store_dir"`
+	}{
+		DispatchID: dispatchID,
+		StoreDir:   filepath.Join(DispatchesDir(), dispatchID),
+	}
+	data, err := json.Marshal(ref)
+	if err != nil {
+		return fmt.Errorf("marshal dispatch ref: %w", err)
+	}
+	return os.WriteFile(filepath.Join(artifactDir, "_dispatch_ref.json"), data, 0644)
+}
+
 func UpdateDispatchMeta(artifactDir string, status string, artifacts []string) error {
 	path := filepath.Join(artifactDir, "_dispatch_meta.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("read meta: %w", err)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("read meta: %w", err)
+		}
+		refData, refErr := os.ReadFile(filepath.Join(artifactDir, "_dispatch_ref.json"))
+		if refErr != nil {
+			return fmt.Errorf("read meta: %w", err)
+		}
+		var ref struct {
+			DispatchID string `json:"dispatch_id"`
+		}
+		if err := json.Unmarshal(refData, &ref); err != nil {
+			return fmt.Errorf("parse dispatch ref: %w", err)
+		}
+		return UpdatePersistentResultStatus(ref.DispatchID, status, artifacts)
 	}
 
 	var meta DispatchMeta
@@ -69,39 +101,62 @@ func UpdateDispatchSessionID(artifactDir string, sessionID string) error {
 	if sessionID == "" {
 		return nil
 	}
-
-	path := filepath.Join(artifactDir, "_dispatch_meta.json")
-	data, err := os.ReadFile(path)
+	refData, err := os.ReadFile(filepath.Join(artifactDir, "_dispatch_ref.json"))
 	if err != nil {
-		return fmt.Errorf("read meta: %w", err)
-	}
-
-	var meta DispatchMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return fmt.Errorf("unmarshal meta: %w", err)
-	}
-	if meta.SessionID == sessionID {
+		meta, metaErr := ReadDispatchMeta(artifactDir)
+		if metaErr != nil {
+			return fmt.Errorf("read dispatch ref: %w", err)
+		}
 		return UpdatePersistentMetaSessionID(meta.DispatchID, sessionID)
 	}
-
-	meta.SessionID = sessionID
-	if err := writeMetaFile(path, &meta); err != nil {
-		return err
+	var ref struct {
+		DispatchID string `json:"dispatch_id"`
 	}
-	return UpdatePersistentMetaSessionID(meta.DispatchID, sessionID)
+	if err := json.Unmarshal(refData, &ref); err != nil {
+		return fmt.Errorf("parse dispatch ref: %w", err)
+	}
+	return UpdatePersistentMetaSessionID(ref.DispatchID, sessionID)
 }
 
 func ReadDispatchMeta(artifactDir string) (*DispatchMeta, error) {
 	data, err := os.ReadFile(filepath.Join(artifactDir, "_dispatch_meta.json"))
-	if err != nil {
+	if err == nil {
+		var meta DispatchMeta
+		if err := json.Unmarshal(data, &meta); err != nil {
+			return nil, fmt.Errorf("unmarshal meta: %w", err)
+		}
+		return &meta, nil
+	}
+	refData, refErr := os.ReadFile(filepath.Join(artifactDir, "_dispatch_ref.json"))
+	if refErr != nil {
 		return nil, fmt.Errorf("read meta: %w", err)
 	}
-
-	var meta DispatchMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("unmarshal meta: %w", err)
+	var ref struct {
+		DispatchID string `json:"dispatch_id"`
 	}
-	return &meta, nil
+	if err := json.Unmarshal(refData, &ref); err != nil {
+		return nil, fmt.Errorf("parse dispatch ref: %w", err)
+	}
+	pm, pmErr := ReadPersistentMeta(ref.DispatchID)
+	if pmErr != nil {
+		return nil, pmErr
+	}
+	dm := &DispatchMeta{
+		DispatchID: pm.DispatchID,
+		SessionID:  pm.SessionID,
+		StartedAt:  pm.StartedAt,
+		Engine:     pm.Engine,
+		Model:      pm.Model,
+		Role:       pm.Role,
+		Cwd:        pm.Cwd,
+		PromptHash: pm.PromptHash,
+	}
+	if result, err := ReadPersistentResult(ref.DispatchID); err == nil {
+		dm.Status = string(result.Status)
+		dm.EndedAt = result.EndedAt
+		dm.Artifacts = result.Artifacts
+	}
+	return dm, nil
 }
 
 type terminalResponseShape struct {
@@ -433,7 +488,7 @@ func ScanArtifacts(dir string) []string {
 			return nil
 		}
 		name := d.Name()
-		if name == "_dispatch_meta.json" || name == "events.jsonl" || name == "inbox.md" || name == "status.json" || name == "host.pid" || name == "control.json" {
+		if name == "_dispatch_meta.json" || name == "_dispatch_ref.json" || name == "events.jsonl" || name == "inbox.md" || name == "status.json" || name == "host.pid" || name == "control.json" {
 			return nil
 		}
 		artifacts = append(artifacts, path)

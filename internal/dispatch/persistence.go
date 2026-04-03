@@ -1,6 +1,7 @@
 package dispatch
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -54,6 +55,7 @@ type PersistentDispatchMeta struct {
 	ArtifactDir string `json:"artifact_dir,omitempty"`
 	StartedAt   string `json:"started_at"`
 	TimeoutSec  int    `json:"timeout_sec,omitempty"`
+	PromptHash  string `json:"prompt_hash,omitempty"`
 }
 
 type PersistentDispatchResult struct {
@@ -101,6 +103,7 @@ func WritePersistentMeta(spec *types.DispatchSpec, annotations types.DispatchAnn
 	if spec == nil {
 		return fmt.Errorf("missing dispatch spec")
 	}
+	hash := sha256.Sum256([]byte(spec.Prompt))
 	artifactDir := strings.TrimSpace(spec.ArtifactDir)
 	if artifactDir != "" {
 		artifactDirAbs, err := filepath.Abs(artifactDir)
@@ -125,6 +128,7 @@ func WritePersistentMeta(spec *types.DispatchSpec, annotations types.DispatchAnn
 		ArtifactDir: artifactDir,
 		StartedAt:   time.Now().UTC().Format(time.RFC3339),
 		TimeoutSec:  spec.TimeoutSec,
+		PromptHash:  fmt.Sprintf("sha256:%x", hash[:8]),
 	}
 	return writeJSONFile(filepath.Join(dir, metaFileName), meta)
 }
@@ -148,6 +152,57 @@ func UpdatePersistentMetaSessionID(dispatchID, sessionID string) error {
 		return err
 	}
 	return writeJSONFile(filepath.Join(dir, metaFileName), meta)
+}
+
+func UpdatePersistentResultStatus(dispatchID, status string, artifacts []string) error {
+	dispatchID = strings.TrimSpace(dispatchID)
+	if dispatchID == "" {
+		return fmt.Errorf("missing dispatch ID")
+	}
+
+	result, err := ReadPersistentResult(dispatchID)
+	switch {
+	case err == nil:
+	case os.IsNotExist(err):
+		result = &PersistentDispatchResult{}
+	default:
+		return err
+	}
+
+	if meta, err := ReadPersistentMeta(dispatchID); err == nil {
+		result.DispatchID = firstNonEmpty(result.DispatchID, meta.DispatchID, dispatchID)
+		result.SessionID = firstNonEmpty(result.SessionID, meta.SessionID)
+		result.Engine = firstNonEmpty(result.Engine, meta.Engine)
+		result.Model = firstNonEmpty(result.Model, meta.Model)
+		result.Role = firstNonEmpty(result.Role, meta.Role)
+		result.Variant = firstNonEmpty(result.Variant, meta.Variant)
+		result.Profile = firstNonEmpty(result.Profile, meta.Profile)
+		result.Cwd = firstNonEmpty(result.Cwd, meta.Cwd)
+		result.ArtifactDir = firstNonEmpty(result.ArtifactDir, meta.ArtifactDir)
+		result.StartedAt = firstNonEmpty(result.StartedAt, meta.StartedAt)
+		result.Effort = firstNonEmpty(result.Effort, meta.Effort)
+		if result.TimeoutSec == 0 {
+			result.TimeoutSec = meta.TimeoutSec
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if result.DispatchID == "" {
+		result.DispatchID = dispatchID
+	}
+	if result.SchemaVersion == 0 {
+		result.SchemaVersion = 1
+	}
+	result.Status = types.DispatchStatus(strings.TrimSpace(status))
+	result.Artifacts = artifacts
+	result.EndedAt = time.Now().UTC().Format(time.RFC3339)
+
+	dir, err := DispatchDir(dispatchID)
+	if err != nil {
+		return err
+	}
+	return writeJSONFile(filepath.Join(dir, resultFileName), result)
 }
 
 func ReadPersistentMeta(dispatchID string) (*PersistentDispatchMeta, error) {
