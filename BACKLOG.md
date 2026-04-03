@@ -95,10 +95,10 @@ Three ax-eval cases had inadequate assertions:
    `handoff_summary` field is now present in the output contract and
    correctly extracted. **Likely resolved.**
 
-2. **`variant-resolution`** — was 0.5, blocked by B-5 (config path
-   resolution). B-5 is now fixed. **Needs re-run** — expect score to improve
-   post-fix. Assertions still check stderr events for model confirmation; may
-   need hardening if `--stream` is not active during tests.
+2. **`variant-resolution`** — **REMOVED** (2026-04-03, Wave 5 / `07ea163`).
+   Role variants have been removed from the codebase entirely. The case tested
+   variant-based model switching which no longer exists. No replacement case
+   planned — flat roles are the only dispatch model.
 
 3. **`response-truncation`** — **DELETED** from cases_v2.go (2026-04-03).
    The case used `--response-max-chars=200` which no longer exists;
@@ -384,14 +384,16 @@ content. Fix when Gemini becomes a primary engine.
 
 ---
 
-### B-2: Hooks — needs rethink and re-implementation
-**Type:** bug | **Priority:** P3 | **Status:** parked (disabled in production)
-**Location:** `internal/hooks/`
-**Decided:** `acabe588` (2026-03-29) — "Hooks are P3, feature we need to
-rethink and re-implement."
+### B-2: Hooks — redesigned as executable scripts (Wave 4)
+**Type:** bug | **Priority:** P3 | **Status:** redesigned — Wave 4 (`dfde796`, 2026-04-03)
+**Location:** `scripts/` (was `internal/hooks/`)
+**Decided:** `acabe588` (2026-03-29) — original parked; redesigned Wave 4 (`dfde796`, 2026-04-03)
 
-False positives on workspace reads. Entire hooks system needs redesign with
-proper event source scoping before re-enabling.
+Pattern-matching hooks with false positives on workspace reads have been replaced
+by executable script hooks. Scripts receive env vars + JSON stdin; exit 0=allow,
+1=block, 2=warn. Default hook: `scripts/block-dangerous.sh`. The old
+`internal/hooks/` pattern-match engine is gone. If additional hook scripts are
+needed, add them to `scripts/` using the new interface.
 
 ---
 

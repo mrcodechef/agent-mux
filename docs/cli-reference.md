@@ -1,192 +1,191 @@
 # CLI Reference
 
-Complete flag and invocation reference for agent-mux. This is the canonical table of every CLI flag, every mode detection rule, and every subcommand.
+This page is the command and flag reference for the current CLI surface.
 
-For operational usage patterns, see the other docs. This page is the lookup table.
+## Valid Commands
 
-## Complete Flag Table
+The top-level command set is:
 
-### Common Flags (All Engines)
+- `dispatch` (default when no explicit command is given)
+- `preview`
+- `help`
+- `list`
+- `status`
+- `result`
+- `inspect`
+- `wait`
+- `steer`
+- `config`
+
+`--signal`, `--stdin`, and `--version` are control flags on the default dispatch path, not standalone commands.
+
+## Dispatch Flags
+
+These flags are registered in normal dispatch mode.
 
 | Flag | Short | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
 | `--engine` | `-E` | string | from config | `codex`, `claude`, `gemini` |
-| `--role` | `-R` | string | — | Role name from config.toml |
-| `--variant` | | string | — | Variant within a role (requires `--role`) |
-| `--model` | `-m` | string | from role/config | Model override |
-| `--effort` | `-e` | string | `high` | `low`, `medium`, `high`, `xhigh` |
-| `--timeout` | `-t` | int | effort-mapped | Timeout in seconds |
-| `--cwd` | `-C` | string | current dir | Working directory for the harness |
-| `--system-prompt` | `-s` | string | — | Inline system prompt |
-| `--system-prompt-file` | | string | — | System prompt from file |
-| `--prompt-file` | | string | — | Prompt from file instead of positional arg |
-| `--skill` | | string[] | `[]` | Repeatable; loads SKILL.md |
-| `--skip-skills` | | bool | `false` | Skip skill injection (keep role engine/model/effort) |
-| `--context-file` | | string | — | Large context file; injects read preamble |
-| `--profile` | | string | — | Coordinator persona from agents/ (`coordinator` is accepted as an alias in `--stdin` JSON input only) |
-| `--config` | | string | — | Explicit config path (overrides default lookup) |
-| `--artifact-dir` | | string | auto | Override artifact directory |
+| `--role` | `-R` | string | empty | Role name |
+| `--profile` |  | string | empty | Profile name |
+| `--cwd` | `-C` | string | current dir | Working directory |
+| `--model` | `-m` | string | from config | Model override |
+| `--effort` | `-e` | string | resolved later | `low`, `medium`, `high`, `xhigh` |
+| `--timeout` | `-t` | int | resolved later | Timeout seconds |
+| `--system-prompt` | `-s` | string | empty | Inline system prompt |
+| `--system-prompt-file` |  | string | empty | System prompt file |
+| `--prompt-file` |  | string | empty | Prompt file instead of positional prompt |
+| `--skill` |  | string[] | empty | Repeatable skill name |
+| `--context-file` |  | string | empty | Context file path |
+| `--artifact-dir` |  | string | auto | Runtime artifact directory |
+| `--recover` |  | string | empty | Previous dispatch ID to continue |
+| `--signal` |  | string | empty | Deliver a message to a running dispatch |
+| `--config` |  | string | empty | Config path override |
 | `--full` | `-f` | bool | `true` | Full access mode |
-| `--no-full` | | bool | `false` | Disable full access |
-| `--max-depth` | | int | `2` | Max recursive dispatch depth |
-| `--yes` | | bool | `false` | Skip TTY confirmation |
-| `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
-| `--version` | | bool | — | Print version |
+| `--no-full` |  | bool | `false` | Disable full access |
+| `--max-depth` |  | int | `2` | Recursive dispatch limit |
+| `--skip-skills` |  | bool | `false` | Skip skill injection |
+| `--stdin` |  | bool | `false` | Read dispatch JSON from stdin |
+| `--yes` |  | bool | `false` | Skip interactive confirmation |
+| `--version` |  | bool | `false` | Print version |
+| `--verbose` | `-v` | bool | `false` | Raw harness lines plus events on stderr |
+| `--stream` | `-S` | bool | `false` | All structured events on stderr |
+| `--async` |  | bool | `false` | Ack-first async flow; does not daemonize |
 
-### Engine-Specific Flags
+## Engine-Specific Flags
 
 | Flag | Short | Engine | Type | Default | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `--sandbox` | | Codex | string | `danger-full-access` | Sandbox mode |
+| `--sandbox` |  | Codex | string | `danger-full-access` | Sandbox mode |
 | `--reasoning` | `-r` | Codex | string | `medium` | Reasoning effort |
-| `--add-dir` | | Codex | string[] | `[]` | Additional writable directories (repeatable) |
-| `--permission-mode` | | Claude | string | — | Permission mode |
-| `--max-turns` | | Claude | int | 0 | Max agent turns |
+| `--add-dir` |  | Codex | string[] | empty | Repeatable writable directory |
+| `--permission-mode` |  | Claude/Gemini | string | empty | Adapter-specific permission or approval mode |
+| `--max-turns` |  | Claude | int | `0` | Maximum turns |
 
-### Dispatch Control Flags
+## `--stdin` Mode
 
-| Flag | Short | Type | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--recover` | | string | — | Dispatch ID to continue from |
-| `--signal` | | string | — | Dispatch ID to send a message to |
-| `--stdin` | | bool | `false` | Read DispatchSpec JSON from stdin |
-| `--async` | | bool | `false` | Fire-and-forget; emits `async_started` ack and returns immediately |
+When `--stdin` is enabled, the CLI uses a reduced flag set:
 
-### Output Flags
+| Flag | Short | Notes |
+| --- | --- | --- |
+| `--stdin` |  | Required to enter stdin mode |
+| `--yes` | `-y` | Skip confirmation |
+| `--verbose` | `-v` | Verbose stderr |
+| `--stream` |  | Stream structured events |
+| `--async` |  | Async ack-first execution |
+| `--config` |  | Config path override |
 
-| Flag | Short | Type | Default | Notes |
-| --- | --- | --- | --- | --- |
-| `--stream` | `-S` | bool | `false` | Stream all events to stderr |
+`--stdin` mode does not register the normal dispatch flag set. The dispatch payload itself carries the execution fields.
 
-## --stdin JSON
+### Core JSON Fields
 
-Reads a `DispatchSpec` JSON object from stdin. `prompt` must be non-empty; all other fields have defaults.
+These keys map to `types.DispatchSpec`:
 
-Defaults when field is absent from JSON:
+- `dispatch_id`
+- `engine`
+- `model`
+- `effort`
+- `prompt`
+- `system_prompt`
+- `cwd`
+- `artifact_dir`
+- `context_file`
+- `timeout_sec`
+- `grace_sec`
+- `max_depth`
+- `depth`
+- `full_access`
+- `engine_opts`
 
-| Field | Default |
-| --- | --- |
-| `dispatch_id` | Generated ULID |
-| `cwd` | `os.Getwd()` |
-| `artifact_dir` | `<sanitize.SecureArtifactRoot()>/<dispatch_id>/` (typically under `~/.agent-mux/` or `/tmp/agent-mux/`) |
-| `full_access` | `true` |
-| `grace_sec` | `60` |
+### Additional JSON Keys Consumed by `main.go`
 
-The `coordinator` key is accepted as an alias for `profile` in stdin JSON. Decoding fails if both keys are present with different values.
+- `role`
+- `profile`
+- `coordinator`
+- `skills`
+- `skip_skills`
+- `recover`
 
-Supported dispatch flags still apply in `--stdin` mode as explicit overrides for the decoded JSON fields.
+Defaults when omitted:
 
-## Config Subcommand
+- `dispatch_id`: generated ULID
+- `cwd`: current working directory
+- `artifact_dir`: `dispatch.DefaultArtifactDir(dispatch_id) + "/"`
+- `full_access`: `true`
+- `grace_sec`: `60`
 
-Inspect the fully-resolved configuration without running a dispatch. All modes respect `--config` and `--cwd`.
+`prompt` is required. `coordinator` is accepted as an alias for `profile`; conflicting values are rejected.
 
-### config (bare)
+## `preview`
+
+```bash
+agent-mux preview [dispatch flags] <prompt>
+```
+
+`preview` resolves the dispatch without executing it and emits:
+
+- `dispatch_spec`
+- `result_metadata`
+- `prompt`
+- `control`
+- `prompt_preamble`
+- `warnings`
+- `confirmation_required`
+
+`result_metadata` currently contains `role`, `profile`, and `skills`.
+
+## `config`
 
 ```bash
 agent-mux config [--config <path>] [--cwd <dir>]
-```
-
-Prints the full resolved config as JSON. The root key `_sources` lists loaded config files.
-
-### config --sources
-
-```bash
 agent-mux config --sources
-```
-
-Prints only the config sources:
-
-```json
-{"kind":"config_sources","sources":["/Users/alice/.agent-mux/config.toml","/repo/.agent-mux/config.toml"]}
-```
-
-### config roles
-
-```bash
 agent-mux config roles [--json]
-```
-
-Tabular listing of all roles and variants:
-
-```
-NAME            ENGINE  MODEL       EFFORT  TIMEOUT
-lifter          codex   gpt-5.4     high    1800s
-  └ claude      claude  claude-...  high    1800s
-```
-
-### config models
-
-```bash
 agent-mux config models [--json]
+agent-mux config skills [--json]
 ```
 
-Engine-to-model-list mapping.
+Implemented subcommands are exactly:
 
-### config skills
+- `config`
+- `config roles`
+- `config models`
+- `config skills`
 
-```bash
-agent-mux config skills
-```
-
-Discoverable skills from all search paths.
-
-## Preview
-
-```bash
-agent-mux preview [flags] <prompt>
-```
-
-Prints the fully resolved `DispatchSpec` as JSON without executing. Useful for verifying that config, roles, skills, and prompt composition resolved correctly before committing to a dispatch.
-
-The preview JSON includes:
-
-| Top-level key | Contents |
-| --- | --- |
-| `dispatch_spec` | Resolved engine, model, effort, cwd, artifact_dir, timeout, depth values |
-| `result_metadata` | role, variant, profile, skills that were resolved |
-| `prompt` | Excerpt of the composed prompt (first 280 runes), total chars, system_prompt_chars |
-| `control` | control_record path and artifact_dir |
-| `prompt_preamble` | Any preamble lines injected before the user prompt |
-| `warnings` | Non-fatal resolution warnings |
-| `confirmation_required` | Whether the dispatch would have required TTY confirmation |
+`config roles` reports one entry per role. The current command does not emit a variant table.
 
 ## Mode Detection
 
-| Invocation | Mode |
+| Invocation | Behavior |
 | --- | --- |
 | `agent-mux` | top-level help |
 | `agent-mux help` | top-level help |
-| `agent-mux --help` | top-level help |
-| `agent-mux [flags] <prompt>` | dispatch (default) |
-| `agent-mux dispatch [flags] <prompt>` | dispatch (explicit) |
+| `agent-mux [flags] <prompt>` | dispatch |
+| `agent-mux dispatch [flags] <prompt>` | dispatch |
 | `agent-mux preview [flags] <prompt>` | preview |
-| `agent-mux --recover <id> [flags] <prompt>` | recover + dispatch |
-| `agent-mux --signal <id> <message>` | signal |
-| `agent-mux --stdin [flags]` | stdin dispatch |
-| `agent-mux --version` | version |
-| `agent-mux config [sub] [flags]` | config introspection |
-| `agent-mux list [flags]` | lifecycle: list dispatches |
-| `agent-mux status <id> [flags]` | lifecycle: dispatch status |
-| `agent-mux result <id> [flags]` | lifecycle: dispatch result |
-| `agent-mux inspect <id> [flags]` | lifecycle: deep dispatch view |
-| `agent-mux wait <id> [flags]` | async: block until done |
-| `agent-mux steer <id> <action> [args]` | steering: mid-flight control |
-| `agent-mux -- help` | dispatch literal prompt `help` |
+| `agent-mux list ...` | lifecycle list |
+| `agent-mux status <id>` | lifecycle status |
+| `agent-mux result <id>` | lifecycle result |
+| `agent-mux inspect <id>` | lifecycle inspect |
+| `agent-mux wait <id>` | lifecycle wait |
+| `agent-mux steer <id> <action> ...` | steering |
+| `agent-mux config ...` | config introspection |
+| `agent-mux --signal <id> "<message>"` | inbox signal path |
+| `agent-mux --stdin < spec.json` | stdin dispatch |
+| `agent-mux --version` | version output |
+| `agent-mux -- help` | literal prompt `help` |
 
 ## Exit Codes
 
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Error (config, dispatch failed, signal failed, recovery failed) |
-| `2` | Usage error (bad flags, missing prompt) |
-| `130` | Cancelled at TTY confirmation prompt |
+| `1` | Runtime, config, lifecycle, signal, or recovery failure |
+| `2` | Usage error |
+| `130` | Cancelled at the interactive confirmation prompt |
 
 ## Cross-References
 
-- [Dispatch](./dispatch.md) for the DispatchSpec and DispatchResult contracts
-- [Config](./config.md) for TOML structure, merge rules, roles
-- [Engines](./engines.md) for engine-specific flag behavior
-- [Lifecycle](./lifecycle.md) for lifecycle subcommand details
-- [Async](./async.md) for `--async` and `wait`
-- [Steering](./steering.md) for `steer` subcommand details
+- [dispatch.md](./dispatch.md) for `DispatchSpec` and `DispatchResult`
+- [async.md](./async.md) for `--async` semantics
+- [lifecycle.md](./lifecycle.md) for lifecycle behavior
+- [recovery.md](./recovery.md) for persistence and recovery

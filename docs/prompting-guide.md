@@ -176,7 +176,7 @@ Persistent personas with default engine/model settings. Put stable persona text 
 
 ## Recovery Prompting
 
-`--recover` builds a continuation prompt listing previous artifacts. Your extra prompt should be the delta, not a re-brief.
+`--recover` continues a prior dispatch from persisted dispatch metadata and artifact discovery. It is the recovery path for timed-out or interrupted work: agent-mux resolves the old artifact directory, lists the prior artifacts, and prepends a continuation prompt. Your extra prompt should be the delta, not a re-brief.
 
 Good:
 
@@ -192,9 +192,11 @@ Re-explain the entire project and restate the old run from scratch.
 
 ## Signal Phrasing
 
-Signals become a short resumed turn inside the harness. Keep them to one crisp sentence.
+`--signal` always writes to the steering inbox. Keep the message to one crisp sentence.
 
-The `--signal` ack confirms inbox write, not delivery. Injection waits for an event boundary.
+The ack confirms the inbox write, not delivery. Consumption waits for an event boundary or inbox poll tick, and on resume-capable adapters the next injection becomes a resumed turn.
+
+For stronger mid-flight steering, use `steer redirect`. On live Codex runs on FIFO-capable platforms it prefers `stdin.pipe`; otherwise it falls back to the same inbox/resume path.
 
 Good:
 

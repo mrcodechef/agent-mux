@@ -22,6 +22,16 @@ All notable changes to this project will be documented in this file.
 - **File-based persistence** — each dispatch writes two files on completion: `~/.agent-mux/dispatches/<id>/meta.json` (written at dispatch start) and `~/.agent-mux/dispatches/<id>/result.json` (written at dispatch end). `list`, `status`, `result`, and `inspect` derive their data from these files.
 - **`preview` command includes `result_metadata`** — `agent-mux preview` stdout now includes a `result_metadata` object describing where `meta.json` and `result.json` will be written for the prospective dispatch.
 
+### Changed (Simplification Waves)
+
+- **Wave 1 (0d9ac3a):** Unified `internal/inbox/` + `internal/fifo/` into `internal/steer/` package
+- **Wave 2 (eb04388):** Absorbed `internal/recovery/` into `internal/dispatch/`
+- **Wave 3 (49625c1):** Unified persistence — `_dispatch_ref.json` pointer in artifact dir; sole source of truth is `~/.agent-mux/dispatches/<id>/meta.json` + `result.json`
+- **Wave 4 (dfde796):** Hooks redesigned — executable scripts replace pattern matching; scripts receive env vars + JSON stdin; exit 0=allow, 1=block, 2=warn; default: `scripts/block-dangerous.sh`
+- **Wave 5 (07ea163):** Config stripped — role variants removed (flat roles only), companion TOML removed, `config.local.toml` removed, old XDG fallback removed; 2-file config merge (global → project)
+- **Wave 6 (7ee19d1):** Flag surface split — `--stdin` mode gets 6 flags only; CLI mode keeps full set
+- **Wave 7 (634673e):** `_dispatch_meta.json` compat shim removed; `PromptHash` added to `PersistentDispatchMeta`
+
 ## [3.2.2] - 2026-03-31
 
 ### Fixed

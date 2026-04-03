@@ -188,8 +188,9 @@ persona text in the coordinator body, dynamic task details in the prompt.
 
 ### Recovery
 
-`--recover` / `"recover"` JSON key already builds a continuation prompt
-listing old artifacts. Your extra prompt should be the delta, not a re-brief.
+`--recover` / `"recover"` continues a prior dispatch from persisted metadata
+and artifact discovery. It is the recovery path for timed-out or interrupted
+work. Your extra prompt should be the delta, not a re-brief.
 
 Good:
 ```text
@@ -203,9 +204,10 @@ Re-explain the entire project and restate the old run from scratch.
 
 ### Signal
 
-Signals become a short resumed turn inside the harness. Keep them crisp.
-The `--signal` ack only confirms the inbox write; injection waits for an
-event boundary.
+`--signal` always writes to the steering inbox. Keep the message crisp.
+The ack only confirms the inbox write; consumption waits for an event
+boundary or inbox poll tick, and on resume-capable adapters the next
+injection becomes a resumed turn.
 
 Good:
 - `Focus on auth paths only; skip docs.`
@@ -219,12 +221,14 @@ Bad:
 
 ### Steer
 
-`steer redirect` is the stronger form of signal -- it prefixes the message
-with `[REDIRECT]` and attempts stdin FIFO injection (Codex) before falling
-back to inbox. Use it when the worker needs to change course mid-flight.
+`steer redirect` is the stronger form of signal. On live Codex runs on
+FIFO-capable platforms it tries `stdin.pipe` first; otherwise it falls back
+to inbox delivery with a `[REDIRECT]` prefix. Use it when the worker needs
+to change course mid-flight.
 
-`steer nudge` is gentler -- default message is "Please wrap up your current
-work and provide a final summary."
+`steer nudge` is gentler. Default message is "Please wrap up your current
+work and provide a final summary." It follows the same FIFO-first, inbox-
+fallback path as `steer redirect`.
 
 ---
 

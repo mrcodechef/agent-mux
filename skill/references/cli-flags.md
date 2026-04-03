@@ -1,211 +1,266 @@
 # CLI Flags and DispatchSpec Reference
 
-Complete flag table, subcommands, --stdin JSON fields, and precedence rules.
+Complete flag table, command surface, `--stdin` JSON fields, and precedence rules.
 
 ---
 
-## CLI Flags
+## Dispatch Flags
 
-### Dispatch flags (all engines)
+### Standard dispatch mode
+
+These flags apply to `agent-mux [flags] <prompt>`, `agent-mux dispatch ...`,
+and `agent-mux preview ...`.
 
 | Flag | Short | Type | Default | Notes |
 |------|-------|------|---------|-------|
 | `--engine` | `-E` | string | from config | `codex`, `claude`, `gemini` |
-| `--role` | `-R` | string | unset | Role name from config.toml |
-| `--variant` | | string | unset | Variant within a role (requires `--role`) |
-| `--profile` | | string | unset | Coordinator persona (loads agents/<name>.md) |
+| `--role` | `-R` | string | unset | Flat role name from config |
+| `--profile` | | string | unset | Coordinator persona from `agents/<name>.md` |
 | `--cwd` | `-C` | string | current dir | Working directory for the harness |
-| `--model` | `-m` | string | from role/config | Model override |
-| `--effort` | `-e` | string | `high` | `low`, `medium`, `high`, `xhigh` |
+| `--model` | `-m` | string | from role/profile/config | Model override |
+| `--effort` | `-e` | string | from role/profile/config | `low`, `medium`, `high`, `xhigh` |
 | `--timeout` | `-t` | int | effort-mapped | Timeout in seconds |
-| `--system-prompt` | `-s` | string | unset | Appended system context |
-| `--system-prompt-file` | | string | unset | File loaded as system prompt |
-| `--prompt-file` | | string | unset | Prompt from file instead of positional arg |
-| `--context-file` | | string | unset | Large context file; injects read preamble |
-| `--skill` | | string[] | `[]` | Repeatable; loads SKILL.md from skill dirs |
-| `--skip-skills` | | bool | `false` | Skip skill injection (keep role engine/model/effort) |
-| `--config` | | string | unset | Explicit config path (overrides default lookup) |
+| `--system-prompt` | `-s` | string | unset | Extra system prompt text |
+| `--system-prompt-file` | | string | unset | Read system prompt text from file |
+| `--prompt-file` | | string | unset | Read prompt from file instead of positional arg |
+| `--context-file` | | string | unset | Sets `AGENT_MUX_CONTEXT` and adds the read preamble |
+| `--skill` | | string[] | `[]` | Repeatable skill names |
+| `--skip-skills` | | bool | `false` | Skip skill injection while keeping role resolution |
+| `--config` | | string | unset | Explicit config source; skips implicit global/project merge |
 | `--artifact-dir` | | string | auto | Override artifact directory |
-| `--recover` | | string | unset | Dispatch ID to continue from |
-| `--signal` | | string | unset | Dispatch ID to send a message to |
-| `--stream` | `-S` | bool | `false` | Stream all events to stderr |
-| `--async` | | bool | `false` | Fire-and-forget; returns ack immediately |
-| `--full` | `-f` | bool | `true` | Full access mode (Codex sandbox) |
-| `--no-full` | | bool | `false` | Disable full access mode |
+| `--recover` | | string | unset | Continue from a prior dispatch ID |
+| `--signal` | | string | unset | Dispatch ID to send a message to; message is the first positional arg |
+| `--stream` | `-S` | bool | `false` | Stream full NDJSON events to stderr |
+| `--async` | | bool | `false` | Return ack immediately, continue in background |
+| `--full` | `-f` | bool | `true` | Codex full-access mode |
+| `--no-full` | | bool | `false` | Disable Codex full-access mode |
 | `--max-depth` | | int | `2` | Maximum recursive dispatch depth |
-| `--stdin` | | bool | `false` | Read DispatchSpec JSON from stdin |
+| `--stdin` | | bool | `false` | Read a DispatchSpec JSON object from stdin |
 | `--yes` | | bool | `false` | Skip TTY confirmation |
-| `--verbose` | `-v` | bool | `false` | Raw harness lines on stderr |
-| `--version` | | bool | | Print version JSON |
+| `--verbose` | `-v` | bool | `false` | Include raw harness lines on stderr |
+| `--version` | | bool | `false` | Print version JSON |
 
 ### Engine-specific flags
 
 | Flag | Short | Type | Default | Applies to | Notes |
 |------|-------|------|---------|-----------|-------|
 | `--sandbox` | | string | `danger-full-access` | Codex | `danger-full-access`, `workspace-write`, `read-only` |
-| `--reasoning` | `-r` | string | `medium` | Codex | Codex reasoning effort |
-| `--add-dir` | | string[] | `[]` | Codex, Claude, Gemini | Repeatable additional writable directories |
-| `--permission-mode` | | string | from config | Claude, Gemini | Claude: `default`, `acceptEdits`, `bypassPermissions`, `plan`. Gemini: maps to `--approval-mode` (default `yolo`) |
-| `--max-turns` | | int | unset | Claude | Maximum conversation turns |
+| `--reasoning` | `-r` | string | `medium` | Codex | Passed as Codex reasoning effort |
+| `--permission-mode` | | string | from config | Codex, Claude, Gemini | Codex: takes precedence over sandbox. Claude: passed through. Gemini: maps to approval mode. |
+| `--max-turns` | | int | `0` | Claude | Maximum conversation turns |
+| `--add-dir` | | string[] | `[]` | All engines | Repeatable additional writable/include directories |
+
+### --stdin mode
+
+When `--stdin` is enabled, dispatch content comes from JSON, not from CLI
+dispatch flags.
+
+Allowed CLI flags in `--stdin` mode:
+
+| Flag | Short | Purpose |
+|------|-------|---------|
+| `--stdin` | | Enable stdin JSON mode |
+| `--yes` | `-y` | Skip TTY confirmation |
+| `--verbose` | `-v` | Raw harness lines on stderr |
+| `--stream` | | Full event stream on stderr |
+| `--async` | | Background dispatch |
+| `--config` | | Explicit config source |
+
+Do not expect `--stdin` mode to merge in CLI `--role`, `--model`, `--cwd`,
+or similar dispatch flags. Put those fields in the JSON object.
 
 ---
 
-## Subcommands
+## Commands
 
 | Invocation | Purpose |
 |------------|---------|
-| `agent-mux [flags] <prompt>` | dispatch (default) |
+| `agent-mux [flags] <prompt>` | dispatch (default command) |
 | `agent-mux dispatch [flags] <prompt>` | dispatch (explicit) |
-| `agent-mux preview [flags] <prompt>` | resolve without executing |
-| `agent-mux config [sub] [flags]` | config introspection |
+| `agent-mux preview [flags] <prompt>` | resolve request without executing |
+| `agent-mux help` | top-level help |
 | `agent-mux list [flags]` | list recent dispatches |
-| `agent-mux status <id> [--json]` | single dispatch status |
-| `agent-mux result <id> [--json]` | retrieve dispatch response |
-| `agent-mux inspect <id> [--json]` | deep dispatch view |
-| `agent-mux wait [--poll <dur>] <id>` | block until async dispatch completes |
-| `agent-mux steer <id> <action> [args]` | mid-flight steering |
-| `agent-mux help` | top-level usage |
+| `agent-mux status <id> [--json]` | current or final status |
+| `agent-mux result <id> [flags]` | stored response or artifact list |
+| `agent-mux inspect <id> [--json]` | record + response + artifacts + meta |
+| `agent-mux wait <id> [flags]` | block until `result.json` exists |
+| `agent-mux steer <id> <action> [args]` | mid-flight control |
+| `agent-mux config [subcommand] [flags]` | config introspection |
 
 ### Config subcommands
 
 | Invocation | Purpose |
 |------------|---------|
-| `agent-mux config` | dump resolved config JSON |
-| `agent-mux config --sources` | show loaded config file paths |
-| `agent-mux config roles [--json]` | role catalog with engines, models, timeouts |
-| `agent-mux config models [--json]` | model allowlist per engine |
-| `agent-mux config skills [--json]` | discovered skills with paths and sources |
-
-Config subcommands accept `--config` and `--cwd` for config/project override.
+| `agent-mux config` | resolved config JSON with `_sources` |
+| `agent-mux config --sources` | JSON list of loaded config files |
+| `agent-mux config roles [--json]` | flat role catalog |
+| `agent-mux config models [--json]` | configured model lists |
+| `agent-mux config skills [--json]` | discovered skills and winning paths |
 
 ### Lifecycle flags
 
 | Subcommand | Flag | Type | Default | Notes |
 |------------|------|------|---------|-------|
-| `list` | `--limit` | int | 20 | Max records (0 = all) |
-| `list` | `--status` | string | unset | Filter: `completed`, `failed`, `timed_out` |
-| `list` | `--engine` | string | unset | Filter: `codex`, `claude`, `gemini` |
-| `list` | `--json` | bool | false | NDJSON output |
-| `status` | `--json` | bool | false | Full record as JSON |
-| `result` | `--json` | bool | false | JSON output |
-| `result` | `--artifacts` | bool | false | List artifact files |
-| `result` | `--no-wait` | bool | false | Error if still running |
-| `inspect` | `--json` | bool | false | Full inspection payload |
-| `wait` | `--poll` | string | 60s | Check interval (Go duration: `30s`, `1m`) |
-| `wait` | `--json` | bool | false | JSON result when done |
-| `wait` | `--config` | string | unset | Config path for poll interval lookup |
+| `list` | `--limit` | int | 20 | `0` means all |
+| `list` | `--status` | string | unset | `completed`, `failed`, `timed_out` |
+| `list` | `--engine` | string | unset | `codex`, `claude`, `gemini` |
+| `list` | `--json` | bool | `false` | NDJSON output |
+| `status` | `--json` | bool | `false` | JSON output |
+| `result` | `--json` | bool | `false` | Compact lifecycle JSON |
+| `result` | `--artifacts` | bool | `false` | List non-internal artifact files |
+| `result` | `--no-wait` | bool | `false` | Error if still running |
+| `inspect` | `--json` | bool | `false` | Combined JSON payload |
+| `wait` | `--poll` | string | config or `60s` | Go duration string |
+| `wait` | `--json` | bool | `false` | Same compact JSON shape as `result --json` |
+| `wait` | `--config` | string | unset | Config source for poll lookup |
+| `wait` | `--cwd` | string | unset | Project root for config discovery |
+| `config` | `--config` | string | unset | Explicit config source |
+| `config` | `--cwd` | string | unset | Project root for config discovery |
+| `config` | `--sources` | bool | `false` | Root command only |
 
 ### Steer actions
 
 | Action | Args | Notes |
 |--------|------|-------|
-| `abort` | none | SIGTERM to host PID (async) or control.json (foreground) |
-| `nudge` | `[message]` | Default: "Please wrap up your current work and provide a final summary." |
-| `redirect` | `"<instructions>"` | Required. Reprioritizes the worker. |
-| `extend` | `<seconds>` | Extends watchdog kill threshold. Positive integer. |
+| `abort` | none | SIGTERM if `host.pid` is alive, else `control.json` |
+| `nudge` | `[message]` | Default wrap-up message if omitted |
+| `redirect` | `"<instructions>"` | Required |
+| `extend` | `<seconds>` | Positive integer |
 
 ---
 
-## DispatchSpec JSON Fields (--stdin)
+## DispatchSpec JSON Fields
 
-Pipe a JSON object. `prompt` is required and must be non-empty.
+Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 
 ### Core fields
 
 | JSON key | Type | Required | Default | Notes |
 |----------|------|----------|---------|-------|
-| `prompt` | string | yes | - | The task prompt |
-| `cwd` | string | - | shell cwd | Harness working directory |
-| `engine` | string | - | from role/config | `codex`, `claude`, `gemini` |
-| `model` | string | - | from role/config | Model override |
-| `effort` | string | - | `high` | `low`, `medium`, `high`, `xhigh` |
-| `system_prompt` | string | - | - | System prompt text |
-| `context_file` | string | - | - | Path to large context file |
-| `role` | string | - | - | Resolves engine/model/effort/timeout from config |
-| `variant` | string | - | - | Variant within a role |
-| `profile` | string | - | - | Coordinator persona name |
-| `coordinator` | string | - | - | Alias for `profile` (conflicts if both set differently) |
-| `skills` | string[] | - | `[]` | Skill names to inject |
-| `skip_skills` | bool | - | `false` | Skip skill injection |
-| `recover` | string | - | - | Dispatch ID to continue from |
+| `prompt` | string | yes | - | Task prompt |
+| `cwd` | string | no | shell cwd | Working directory |
+| `engine` | string | no | from profile/role/config | `codex`, `claude`, `gemini` |
+| `model` | string | no | from profile/role/config | Model override |
+| `effort` | string | no | from profile/role/config | `low`, `medium`, `high`, `xhigh` |
+| `system_prompt` | string | no | unset | Run-level system prompt |
+| `context_file` | string | no | unset | Sets `AGENT_MUX_CONTEXT` |
+| `role` | string | no | unset | Flat role name |
+| `profile` | string | no | unset | Coordinator/profile name |
+| `coordinator` | string | no | unset | Alias for `profile`; conflicting values error |
+| `skills` | string[] | no | `[]` | Extra skill names |
+| `skip_skills` | bool | no | `false` | Disable skill injection |
+| `recover` | string | no | unset | Prior dispatch ID to continue |
 
 ### Control fields
 
 | JSON key | Type | Default | Notes |
 |----------|------|---------|-------|
-| `dispatch_id` | string | auto ULID | Unique dispatch identifier |
-| `artifact_dir` | string | auto | Override artifact directory |
-| `timeout_sec` | int | effort-mapped | Override in seconds (must be > 0) |
-| `grace_sec` | int | 60 | Grace period in seconds (must be > 0) |
-| `max_depth` | int | 2 | Recursive dispatch limit |
-| `depth` | int | 0 | Current recursion depth |
-| `full_access` | bool | true | Codex sandbox override |
-| `engine_opts` | object | `{}` | Per-engine overrides (sandbox, reasoning, permission-mode, add-dir, max-turns) |
+| `dispatch_id` | string | auto ULID | Must be a valid dispatch ID if supplied |
+| `artifact_dir` | string | auto | Runtime artifact directory |
+| `timeout_sec` | int | effort-mapped | Must be `> 0` when present |
+| `grace_sec` | int | `60` | Must be `> 0` when present |
+| `max_depth` | int | `2` or config default | Recursive dispatch limit |
+| `depth` | int | `0` | Current recursion depth |
+| `full_access` | bool | `true` | Codex full-access toggle |
+| `engine_opts` | object | `{}` | Engine and liveness overrides |
 
 ### engine_opts keys
 
-| Key | Type | Engine | Notes |
-|-----|------|--------|-------|
-| `sandbox` | string | Codex | `danger-full-access`, `workspace-write`, `read-only` |
-| `reasoning` | string | Codex | Reasoning effort level |
-| `permission-mode` | string | Claude, Gemini | Permission/approval mode |
-| `max-turns` | int | Claude | Maximum conversation turns |
-| `add-dir` | string[] | All | Additional writable directories |
+| Key | Type | Notes |
+|-----|------|-------|
+| `sandbox` | string | Codex sandbox value |
+| `reasoning` | string | Codex reasoning effort |
+| `permission-mode` | string | Permission/approval mode override |
+| `max-turns` | int | Claude turn cap |
+| `add-dir` | string[] | Extra writable/include directories |
+| `heartbeat_interval_sec` | int | Override heartbeat cadence |
+| `silence_warn_seconds` | int | Override frozen warning threshold |
+| `silence_kill_seconds` | int | Override frozen kill threshold |
 
 ---
 
-## Persistence Paths
+## Persistence and Runtime Paths
 
 | Path | Contents |
 |------|----------|
-| `~/.agent-mux/dispatches/<dispatch_id>/meta.json` | Dispatch metadata (ID, engine, model, role, cwd, timeout, started_at) |
-| `~/.agent-mux/dispatches/<dispatch_id>/result.json` | Full dispatch result with response, activity, metadata |
-| `<artifact_dir>/status.json` | Live status (state, elapsed, tools, files changed) |
-| `<artifact_dir>/events.jsonl` | NDJSON event log |
-| `<artifact_dir>/host.pid` | PID of async dispatch process |
-| `<artifact_dir>/control.json` | Steering control (abort, extend_kill_seconds) |
-| `<artifact_dir>/inbox.md` | Coordinator mailbox for signal/steer injection |
-| `<artifact_dir>/full_output.md` | Full response when truncation occurred |
-| `<artifact_dir>/meta.json` | Artifact-local dispatch meta (legacy/runtime) |
+| `~/.agent-mux/dispatches/<dispatch_id>/meta.json` | durable dispatch metadata |
+| `~/.agent-mux/dispatches/<dispatch_id>/result.json` | durable dispatch result |
+| `<artifact_dir>/_dispatch_ref.json` | thin pointer to the durable store |
+| `<artifact_dir>/status.json` | live status |
+| `<artifact_dir>/events.jsonl` | full NDJSON event log |
+| `<artifact_dir>/host.pid` | async host PID |
+| `<artifact_dir>/control.json` | abort and extend requests |
+| `<artifact_dir>/inbox.md` | NDJSON coordinator inbox |
+| `<artifact_dir>/stdin.pipe` | Unix FIFO for soft Codex steering |
+| `<artifact_dir>/*` | worker-created artifact files |
 
-Default artifact root: `$XDG_RUNTIME_DIR/agent-mux/<id>/` or `/tmp/agent-mux-<uid>/<id>/`.
+Default artifact root comes from the secure runtime root chosen by agent-mux.
+The durable store is always `~/.agent-mux/dispatches/<id>/`.
 
 ---
 
-## Precedence Order
+## Precedence
+
+### Config source order
+
+Implicit lookup uses exactly two files, later winning on conflict:
+
+```
+~/.agent-mux/config.toml
+  > <cwd>/.agent-mux/config.toml
+```
+
+`--config` is the sole config source when set.
+
+### Dispatch fields in standard CLI mode
 
 For `engine`, `model`, and `effort`:
 
 ```
-CLI flags / JSON explicit values
-  > --role (resolved from merged TOML config)
-  > --profile coordinator frontmatter scalars
+explicit CLI flags
+  > role
+  > profile
   > merged config [defaults]
-  > hardcoded defaults (effort="high")
+  > hardcoded defaults
 ```
 
 For `timeout`:
 
 ```
-Explicit timeout_sec in JSON / CLI --timeout
-  > role.timeout from config
-  > profile/coordinator frontmatter timeout
-  > timeout table for chosen effort level
+explicit CLI --timeout
+  > role.timeout
+  > profile.timeout
+  > timeout table for the chosen effort
 ```
 
-Config file loading order (later wins on conflicts):
+### Dispatch fields in --stdin mode
+
+For `engine`, `model`, and `effort`:
 
 ```
-~/.agent-mux/config.toml (global)
-  > ~/.agent-mux/config.local.toml (global machine-local)
-  > <cwd>/.agent-mux/config.toml (project)
-  > <cwd>/.agent-mux/config.local.toml (project machine-local)
+explicit JSON fields
+  > profile
+  > role
+  > merged config [defaults]
+  > hardcoded defaults
 ```
 
-`--config <path>` is the sole source when set (skips implicit lookup).
+For `timeout`:
 
-In `--stdin` mode: JSON payload is the primary source. CLI dispatch flags
-are merged only for fields the JSON doesn't set.
+```
+explicit JSON timeout_sec
+  > profile.timeout
+  > role.timeout
+  > timeout table for the chosen effort
+```
+
+### Poll interval
+
+```
+wait --poll
+  > [async].poll_interval
+  > 60s
+```
 
 ---
 
@@ -214,6 +269,6 @@ are merged only for fields the JSON doesn't set.
 | Code | Meaning |
 |------|---------|
 | `0` | Success |
-| `1` | Error (config, dispatch, signal, recovery) |
-| `2` | Usage error (bad flags, missing prompt) |
+| `1` | Error |
+| `2` | Usage or parse error |
 | `130` | Cancelled at TTY confirmation |

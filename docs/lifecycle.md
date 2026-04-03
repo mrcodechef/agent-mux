@@ -1,121 +1,124 @@
 # Lifecycle
 
-Lifecycle subcommands provide post-dispatch introspection and management. They read durable records from `~/.agent-mux/dispatches/<id>/` and artifact directories created during dispatch — no running process required.
+Lifecycle commands are the read and control surfaces around stored dispatches:
 
-All lifecycle subcommands output human-readable tables by default. Pass `--json` for structured JSON output. Errors follow the standard envelope: `{"kind":"error","error":{...}}`.
+- `list`
+- `status`
+- `result`
+- `inspect`
+- `wait`
 
-## List
+They resolve dispatches primarily through `~/.agent-mux/dispatches/<dispatch_id>/` and use artifact directories for live status, artifact listing, and compatibility fallbacks.
+
+Successful output is human-readable by default. Failures are emitted as JSON envelopes of the form `{"kind":"error","error":{...}}`.
+
+## `list`
 
 ```bash
 agent-mux list [--limit N] [--status completed|failed|timed_out] [--engine codex|claude|gemini] [--json]
 ```
 
-Lists recent dispatches. Default limit is 20 (pass 0 for all).
+- Reads dispatch records from `DispatchesDir()`, which resolves to `~/.agent-mux/dispatches/`.
+- Sorts records newest-first.
+- Defaults to `--limit 20`; `--limit 0` means all.
+- `--json` emits NDJSON, one `DispatchRecord` per line.
 
-Output columns: ID (12-character prefix), STATUS, ENGINE, MODEL, DURATION, CWD.
+Default table columns are `ID`, `STATUS`, `ENGINE`, `MODEL`, `DURATION`, and `CWD`.
 
-With `--json`, emits NDJSON (one record per line).
-
-Example — show the last 5 failed Codex dispatches:
-
-```bash
-agent-mux list --limit 5 --status failed --engine codex
-```
-
-## Status
+## `status`
 
 ```bash
-agent-mux status [--json] <dispatch_id>
+agent-mux status [--json] <dispatch_id_or_unique_prefix>
 ```
 
-Shows status for a single dispatch. Accepts full ID or unique prefix.
+Behavior:
 
-Fields shown: Status, Engine/Model, Duration, Started, Truncated, ArtifactDir.
+- If a durable `DispatchRecord` already has a terminal status, `status` reports that record.
+- Otherwise it reads `<artifact_dir>/status.json`.
+- For live async runs it also checks `host.pid`; if the PID is gone while the state is still running, it reports `orphaned`.
 
-For running dispatches, reads live `status.json` from the artifact directory. Detects orphaned processes where the host PID is dead but the dispatch was never marked terminal.
+Human output shows either:
 
-Example:
+- durable fields: status, engine/model, duration, started, truncated, artifact dir
+- or live fields: state, elapsed, last activity, tools used, files changed, artifact dir
+
+## `result`
 
 ```bash
-agent-mux status 01JA
+agent-mux result [--json] [--artifacts] [--no-wait] <dispatch_id_or_unique_prefix>
 ```
 
-## Result
+Default behavior:
+
+- read `~/.agent-mux/dispatches/<dispatch_id>/result.json`
+- print the stored `response`
+
+If no durable result exists yet:
+
+- `--no-wait` returns a small JSON object with `error: "dispatch_running"` when the run is still live
+- otherwise `result` polls every second until the dispatch reaches a terminal state
+
+`--artifacts` switches the command to artifact listing mode and prints files from the resolved artifact directory instead of the response.
+
+If there is still no durable result for an older dispatch, `result` falls back to legacy `full_output.md` under the default artifact path.
+
+`--json` on `result` does not emit the full stored `DispatchResult`; it emits a thinner object containing at least `dispatch_id` and `response`, plus `status`, `session_id`, and sometimes `kill_reason` when those can be resolved.
+
+## `inspect`
 
 ```bash
-agent-mux result [--json] [--artifacts] [--no-wait] <dispatch_id>
+agent-mux inspect [--json] <dispatch_id_or_unique_prefix>
 ```
 
-Retrieves the dispatch response. Accepts full ID or unique prefix.
+`inspect` requires a dispatch that resolves to a durable record.
 
-Default behavior: prints the stored result text. Falls back to `full_output.md` in the artifact directory for truncated or legacy dispatches.
+It combines:
 
-| Flag | Effect |
-| --- | --- |
-| `--artifacts` | Lists files in the artifact directory instead of printing the response |
-| `--no-wait` | Returns an error if the dispatch is still running instead of blocking |
-| `--json` | Structured JSON output |
+- the dispatch record
+- the stored response when present
+- the resolved artifact directory
+- the scanned artifact list
+- `meta` from `_dispatch_ref.json` and the durable store when available
 
-If the dispatch is still running, blocks until completion by default.
+The human-readable form prints the main record fields first, then artifacts, then the response body.
 
-Example — list artifacts:
+## `wait`
 
 ```bash
-agent-mux result --artifacts 01JARQ8X
+agent-mux wait [--json] [--poll <duration>] [--config <path>] [--cwd <dir>] <dispatch_id_or_unique_prefix>
 ```
 
-## Inspect
+`wait` blocks on the durable result path:
 
-```bash
-agent-mux inspect [--json] <dispatch_id>
+```text
+~/.agent-mux/dispatches/<dispatch_id>/result.json
 ```
 
-Deep view of a dispatch. Accepts full ID or unique prefix.
+Poll interval precedence is:
 
-Shows all record fields: ID, Status, Engine, Model, Role, Variant, Started, Ended, Duration, Truncated, Cwd, ArtifactDir. Also includes artifact listing and full response text.
+1. CLI `--poll`
+2. config `[async].poll_interval`
+3. built-in default `60s`
 
-JSON mode adds `meta` from `~/.agent-mux/dispatches/<id>/meta.json` when present.
+Intervals shorter than `1s` are clamped to `1s`.
 
-Example:
+During polling, `wait` writes progress lines to stderr such as:
 
-```bash
-agent-mux inspect 01JARQ8X
+```text
+[42s] running | 7 tools | 3 files changed
 ```
 
-## Wait
+Failure cases before `result.json` appears:
 
-```bash
-agent-mux wait [--json] [--poll <duration>] [--config <path>] [--cwd <dir>] <dispatch_id>
-```
+- dispatch deadline passed
+- `host.pid` exists but the process is dead
+- live `status.json` reports `timed_out`
+- live `status.json` reports `orphaned`
 
-Blocks until an async dispatch reaches a terminal state. Polls `~/.agent-mux/dispatches/<id>/result.json` on each interval. Completion is defined by the presence of `result.json`, not by `status.json` state alone.
-
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `--poll` | `60s` | Status poll interval (e.g. `5s`, `1m`) |
-| `--json` | off | Emit JSON result when done |
-| `--config` | standard | Config resolution for `poll_interval` fallback |
-| `--cwd` | current dir | Working directory for config lookup |
-
-Poll interval precedence: CLI `--poll` > `[async].poll_interval` in config.toml > hardcoded `60s`.
-
-On each tick `wait` emits a status line to stderr:
-
-```
-[<elapsed_s>s] running | <N> tools | <N> files changed
-```
-
-`wait` exits with code `1` and emits an error if the dispatch is orphaned (host PID dead, no `result.json`) or timed out before `result.json` appeared. On success it prints the response text (or JSON with `--json`) and exits `0`.
-
-Example:
-
-```bash
-agent-mux wait --poll 10s --json 01JARQ8X
-```
+On success, stdout matches `result`; with `--json`, stdout matches `result --json`.
 
 ## Cross-References
 
-- [Dispatch](./dispatch.md) for the DispatchResult contract
-- [Recovery](./recovery.md) for artifact directory layout and durable persistence
-- [Async](./async.md) for `--async` dispatch and status.json semantics
-- [CLI Reference](./cli-reference.md) for the complete flag table
+- [async.md](./async.md) for async ack and live status semantics
+- [recovery.md](./recovery.md) for `_dispatch_ref.json`, `meta.json`, and `result.json`
+- [cli-reference.md](./cli-reference.md) for the full command and flag surface

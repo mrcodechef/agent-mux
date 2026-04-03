@@ -71,7 +71,7 @@ Different engines, different blind spots, high confidence.
 
 ### Fan-Out
 
-Spawn N parallel workers on independent subtasks using `grunt` or `batch` roles with `--async`. Workers return inline by default. Over 200 lines, workers write to `_workbench/YYYY-MM-DD-{engine}-{topic}.md`. Coordinator collects results via `ax wait` and `ax result`, then synthesizes all returns into one output.
+Spawn N parallel workers on independent subtasks using `grunt` or `batch` roles with `--async`. Workers return inline by default. Over 200 lines, workers write to `_workbench/YYYY-MM-DD-{engine}-{topic}.md`. Coordinator collects results via `agent-mux wait` and `agent-mux result`, then synthesizes all returns into one output.
 
 ```bash
 # Dispatch parallel workers
@@ -89,7 +89,9 @@ done
 
 ### Mid-flight Steering
 
-Use `steer` to redirect a running worker without killing it:
+Use `steer` to redirect a running worker without killing it. On live Codex
+runs on FIFO-capable platforms, `nudge` and `redirect` try `stdin.pipe`
+first; otherwise they fall back to the inbox/resume path.
 
 ```bash
 # Nudge a slow worker to wrap up

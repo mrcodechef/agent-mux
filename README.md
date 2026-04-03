@@ -8,7 +8,7 @@ Cross-harness dispatch layer. One CLI, one JSON contract, any LLM engine.
 
 ## What It Does
 
-AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated — each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them: any LLM can dispatch work to any other LLM through one JSON contract and one config system. Roles, variants, and reusable TOML config turn good dispatch patterns into repeatable workflows.
+AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated — each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them: any LLM can dispatch work to any other LLM through one JSON contract and one config system. Flat roles and reusable TOML config turn good dispatch patterns into repeatable workflows.
 
 ## Core Principles
 
@@ -46,7 +46,7 @@ Dispatch output is always a single JSON object on stdout. Lifecycle subcommands 
 
 Roles, models, and timeouts live in `.agent-mux/config.toml` alongside a `prompts/` directory for system prompt files.
 
-**Resolution order** (later wins): `~/.agent-mux/config.toml` (global) → `~/.agent-mux/config.local.toml` (global machine-local) → `<cwd>/.agent-mux/config.toml` (project) → `<cwd>/.agent-mux/config.local.toml` (project machine-local) → `--config` (explicit). Project config merges on top of global with **defined-wins** semantics — set fields override, absent fields inherit. `config.local.toml` files are for per-machine overrides and should be gitignored.
+**Resolution order** (later wins): `~/.agent-mux/config.toml` (global) → `<cwd>/.agent-mux/config.toml` (project) → `--config` (explicit). Project config merges on top of global with **defined-wins** semantics — set fields override, absent fields inherit.
 
 **Minimal role definition:**
 
@@ -61,7 +61,7 @@ system_prompt_file = "prompts/scout.md"
 
 Dispatch: `{"role":"scout","prompt":"Find all TODO comments","cwd":"/repo"}`
 
-> **[Setup Guide](references/config-setup-guide.md)** — first-time walkthrough, roles, variants.
+> **[Setup Guide](references/config-setup-guide.md)** — first-time walkthrough, roles.
 > **[TOML Reference](references/config-guide.md)** — full schema, every field, merge semantics.
 
 ## Engines

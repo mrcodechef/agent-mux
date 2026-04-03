@@ -1,8 +1,11 @@
 # Steering
 
-agent-mux provides mid-flight control over running dispatches through two mechanisms: the signal/inbox system for message delivery, and the `steer` subcommand for structured control actions.
+agent-mux steering is unified under `internal/steer`. That package owns both delivery channels:
 
-Steering is decoupled from the dispatch path. For most harnesses, messages arrive through the inbox and are consumed at event boundaries. For live Codex workers on Unix, `steer nudge` and `steer redirect` can use a dispatch-local FIFO to inject soft steering over the worker stdin pipe without forcing a resume.
+- `Delivery.InboxDir`: the dispatch artifact directory, where durable inbox messages live in `inbox.md`
+- `Delivery.FIFOPath`: the optional `stdin.pipe` named pipe used for live Codex soft steering on FIFO-capable platforms
+
+`--signal` and inbox fallback use the durable inbox path. `steer nudge` and `steer redirect` try the FIFO first when a live Codex run is ready; otherwise they fall back to the same inbox/resume path.
 
 ## Signal System
 
@@ -12,31 +15,35 @@ Steering is decoupled from the dispatch path. For most harnesses, messages arriv
 agent-mux --signal <dispatch_id> "Focus on the parser module only"
 ```
 
-Delivers a message to a running dispatch's inbox. Returns a JSON ack confirming the message was appended, but does not confirm the worker has consumed it.
+Writes a message to the running dispatch's inbox and returns a JSON ack. The ack confirms the inbox write succeeded; it does not confirm the worker has consumed the message yet.
 
 ### Inbox Mechanics
 
-**Append-under-lock** (`WriteInbox`): opens the inbox file with `O_WRONLY|O_APPEND|O_CREATE`, acquires `LOCK_EX` via `syscall.Flock`, appends `message + "\n---\n"`.
+`CreateInbox` creates `inbox.md` at dispatch start.
 
-**Poll-at-event-boundary**: `HasMessages` is a fast stat check (no lock). Polled in three places:
+`WriteInbox` opens `inbox.md` with `O_WRONLY|O_APPEND|O_CREATE`, takes `LOCK_EX` with `syscall.Flock`, and appends one NDJSON-encoded `InboxMessage`. Each record carries the message text plus an RFC3339Nano UTC timestamp.
 
-1. After every harness stdout line in `scanHarnessOutput`
-2. On the 250ms inbox ticker
-3. On the 5-second watchdog ticker
+`HasMessages` is a fast size check on `inbox.md`. The engine polls it in three places:
 
-The dual path (stdout-linked plus timer) ensures that steering messages arrive even when the harness is idle and not producing output.
+1. after every harness stdout line in `scanHarnessOutput`
+2. on the 250ms inbox ticker
+3. on the 5-second watchdog ticker
 
-**Atomic read-and-clear** (`ReadInbox`): opens with `O_RDWR`, acquires `LOCK_EX`, reads all content, truncates to zero, splits on `"\n---\n"`, returns messages.
+That dual path keeps steering responsive even when a harness is temporarily quiet.
+
+`ReadInbox` opens `inbox.md` with `O_RDWR`, takes `LOCK_EX`, reads all content, truncates the file to zero, and parses the queued messages. It accepts the current NDJSON format and still reads the legacy `\n---\n` block format for backward compatibility.
 
 ### Resume Flow
 
-When inbox messages arrive, the LoopEngine:
+When queued inbox messages are ready and the adapter supports resume, `LoopEngine`:
 
-1. Gracefully stops the current harness process
-2. Re-invokes via the adapter's native resume protocol (`ResumeArgs`)
-3. The harness maintains its own conversation state; agent-mux does not manage it
+1. emits `coordinator_inject` for the queued message
+2. gracefully stops the current harness process
+3. re-invokes the harness through the adapter's native resume protocol (`ResumeArgs`)
 
-This means the message is injected into the harness conversation as a continuation, not as an out-of-band signal.
+The harness owns conversation state. agent-mux only manages delivery and process lifecycle.
+
+For inbox fallback from `steer nudge` and `steer redirect`, the CLI writes `[NUDGE]` or `[REDIRECT]` prefixes into the inbox. The engine reformats those into the same coordinator phrasing used for live FIFO injection before resuming.
 
 ## Steer Commands
 
@@ -50,7 +57,7 @@ Live observation is separate: use `agent-mux status [--json] <dispatch_id>` for 
 agent-mux steer 01JQXYZ abort
 ```
 
-Kills the worker process. Tries `SIGTERM` to the host PID first (for async dispatches). Falls back to writing `control.json` with `abort: true` for foreground dispatches.
+Kills the worker process. It tries `SIGTERM` to `host.pid` first. If there is no live host PID, it falls back to writing `control.json` with `abort: true` for the watchdog to pick up.
 
 ### steer nudge
 
@@ -59,7 +66,9 @@ agent-mux steer 01JQXYZ nudge
 agent-mux steer 01JQXYZ nudge "Please summarize what you have so far"
 ```
 
-Sends a wrap-up message. On live Codex workers with a ready stdin FIFO, agent-mux injects the nudge through `stdin.pipe`. Otherwise it falls back to inbox delivery. Default message: "Please wrap up your current work and provide a final summary."
+Sends a wrap-up message. Default message: "Please wrap up your current work and provide a final summary."
+
+On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[NUDGE]` prefix.
 
 ### steer redirect
 
@@ -67,23 +76,7 @@ Sends a wrap-up message. On live Codex workers with a ready stdin FIFO, agent-mu
 agent-mux steer 01JQXYZ redirect "focus on the tests, skip the refactor"
 ```
 
-Redirects the worker with new instructions. On live Codex workers with a ready stdin FIFO, agent-mux injects the redirect through `stdin.pipe`. Otherwise it falls back to inbox delivery. The instructions argument is required.
-
-## FIFO Soft Steering For Codex
-
-Codex dispatches on Unix create `stdin.pipe` inside the artifact directory and keep a reader open for the dispatch lifetime. `agent-mux steer <id> nudge|redirect` checks `_dispatch_meta.json`, `status.json`, and `host.pid` in the artifact directory; when the worker is still running and `stdin_pipe_ready` is true, the CLI writes a single JSON envelope to the FIFO and closes it immediately. The artifact directory is resolved from the durable dispatch record at `~/.agent-mux/dispatches/<dispatch_id>/meta.json`, which persists it independent of process lifetime.
-
-This path avoids the inbox -> stop -> resume cycle. The LoopEngine receives the envelope, emits `coordinator_inject`, and writes the formatted steer text into the live Codex stdin pipe. If a tool call is active, delivery is deferred until the tool ends.
-
-FIFO soft steering is used only when all of these are true:
-
-- Engine is `codex`
-- Platform supports FIFOs (Unix; Windows stays on inbox fallback)
-- `status.json` reports `state: "running"`
-- `status.json` reports `stdin_pipe_ready: true`
-- `host.pid` exists and is still alive
-
-Fallback to inbox happens when any of those checks fail, or when FIFO open/write returns readiness errors such as missing pipe, no reader, or broken pipe.
+Redirects the worker with new instructions. On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[REDIRECT]` prefix. The instructions argument is required.
 
 ### steer extend
 
@@ -93,13 +86,31 @@ agent-mux steer 01JQXYZ extend 300
 
 Extends the watchdog kill threshold by writing `control.json` with `extend_kill_seconds`. The watchdog reads this file on each tick and applies the extension. Useful when a legitimate long-running operation needs more time than the configured `silence_kill_seconds`.
 
+## FIFO Soft Steering For Codex
+
+On FIFO-capable platforms, `LoopEngine.Dispatch` creates `stdin.pipe` inside the artifact directory and keeps a read end plus keepalive writer open for the run lifetime. `agent-mux steer <id> nudge|redirect` resolves the artifact directory from the durable dispatch metadata and uses FIFO injection only when all of these are true:
+
+- dispatch metadata says the engine is `codex`
+- the platform supports FIFOs
+- `status.json` reports `state: "running"`
+- `status.json` reports `stdin_pipe_ready: true`
+- `host.pid` exists and is still alive
+
+If any check fails, or FIFO open/write returns readiness errors such as missing path, no reader, or broken pipe, the CLI falls back to inbox delivery.
+
+The FIFO payload is one JSON envelope with `action` and `message`. The loop's soft-stdin bridge decodes it, emits `coordinator_inject`, and writes formatted text directly into the live Codex stdin pipe. If a tool or command is active, delivery is deferred until it completes; once `max_steer_wait_seconds` is exceeded, the loop force-proceeds instead of deferring forever.
+
 ## Live Status
 
 ```bash
 agent-mux status --json 01JQXYZ
 ```
 
-Reads live status from `status.json` in the artifact directory. Detects orphaned processes where the host PID is dead but the state is still recorded as "running".
+Reads live status from `status.json` in the artifact directory. It can detect orphaned processes where the host PID is dead but the state is still recorded as `running`.
+
+For soft steering, the important field is:
+
+- `stdin_pipe_ready`: true when the dispatch-local `stdin.pipe` FIFO bridge is live and safe for `steer nudge` / `steer redirect`
 
 ## Output Format
 
@@ -117,22 +128,16 @@ All steer commands output a JSON ack:
 `mechanism` reports how the steer action was delivered:
 
 - `stdin_fifo`: live Codex soft steering through `stdin.pipe`
-- `inbox`: inbox fallback for non-Codex, non-Unix, not-ready, or failed FIFO delivery
+- `inbox`: inbox fallback for non-Codex, unsupported platforms, not-ready runs, or failed FIFO delivery
 - `sigterm`: `steer abort` delivered through `SIGTERM`
 - `control_file`: `steer abort` fallback through `control.json`
 
 Errors follow the standard envelope: `{"kind":"error","error":{...}}`.
 
-## status.json
-
-Running dispatches write `status.json` with live state, activity counters, and steering readiness. For soft steering, the important field is:
-
-- `stdin_pipe_ready`: true when the dispatch-local `stdin.pipe` FIFO is live and safe for `steer nudge` / `steer redirect`
-
 ## Cross-References
 
-- [Architecture](./architecture.md) for inbox design and concurrency model
-- [Recovery](./recovery.md) for artifact directory layout and control records
+- [Architecture](./architecture.md) for package boundaries and concurrency
+- [Recovery](./recovery.md) for durable dispatch metadata and `--recover`
 - [Async](./async.md) for background dispatch and status.json
-- [Dispatch](./dispatch.md) for the DispatchResult contract
+- [Dispatch](./dispatch.md) for the `DispatchResult` contract
 - [Engines](./engines.md) for per-adapter resume support

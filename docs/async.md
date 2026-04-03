@@ -1,135 +1,109 @@
 # Async Dispatch
 
-agent-mux supports fire-and-forget dispatch via `--async`. The CLI returns immediately with a dispatch ID; the worker runs in the background. Results are collected later with `wait` or `result`.
+`agent-mux --async` switches dispatch into an acknowledgement-first flow for long-running work.
 
-This is the escape hatch for callers that cannot block on a long-running dispatch. The tradeoff is explicit: you give up real-time event visibility in exchange for immediate control return.
+## What `--async` Does
 
-## --async Flag
+Before the async acknowledgement is written, agent-mux:
 
-When `--async` is present, agent-mux:
+1. Ensures the artifact directory exists.
+2. Registers the dispatch in the durable store at `~/.agent-mux/dispatches/<dispatch_id>/meta.json`.
+3. Writes `<artifact_dir>/host.pid`.
+4. Writes an initial `<artifact_dir>/status.json`.
+5. Emits an `async_started` JSON object to stdout.
 
-1. Starts the dispatch in a background goroutine
-2. Redirects the worker's stdout and stderr to `/dev/null`
-3. Returns an `async_started` JSON ack to stdout immediately
+After that ack, stdout and stderr are detached to `/dev/null`, and the dispatch continues in the current process.
 
-The calling process exits after printing the ack. The worker continues in the same OS process until completion or timeout.
+`--async` does not fork or daemonize a separate worker. If the caller needs shell control back immediately, it must background or supervise `agent-mux` itself.
 
-## async_started Response
+## `async_started` Ack
 
 ```json
 {
   "schema_version": 1,
   "kind": "async_started",
-  "dispatch_id": "01JQXYZ...",
-  "artifact_dir": "/path/to/artifact/dir/01JQXYZ..."
+  "dispatch_id": "01K...",
+  "artifact_dir": "/path/to/artifacts/01K.../"
 }
 ```
 
-The `dispatch_id` is the handle for all subsequent operations: `wait`, `result`, `status`, `inspect`, `steer`.
+At ack time, `host.pid` and `status.json` are already on disk. The artifact-local `_dispatch_ref.json` pointer is written later during normal dispatch setup; the authoritative metadata already lives in `~/.agent-mux/dispatches/<dispatch_id>/meta.json`.
 
-The `artifact_dir` is guaranteed to exist and contain `host.pid` and `status.json` before the ack is emitted. Consumers can begin polling immediately after receiving the ack.
+## Runtime Files vs Durable Store
+
+Runtime state lives in the artifact directory:
+
+- `_dispatch_ref.json`
+- `status.json`
+- `host.pid` for async dispatches
+- `events.jsonl`
+- `inbox.md` and `control.json` when steering is used
+- worker-created artifact files
+
+Durable state lives only in:
+
+```text
+~/.agent-mux/dispatches/<dispatch_id>/
+  meta.json
+  result.json
+```
+
+`wait` and `result` treat `result.json` as the completion signal. `status.json` is live telemetry, not the durable completion record.
+
+## `status.json`
+
+Source of truth: `dispatch.LiveStatus` in `internal/dispatch/status.go`.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `state` | string | `running`, `completed`, `failed`, `timed_out`; `status` may also synthesize `orphaned` |
+| `elapsed_s` | int | Seconds since dispatch start |
+| `last_activity` | string | Most recent activity label |
+| `tools_used` | int | Tool-call count |
+| `files_changed` | int | File-write count |
+| `stdin_pipe_ready` | bool | Present when Codex soft steering is available |
+| `ts` | string | RFC3339 timestamp of the write |
+| `dispatch_id` | string | Dispatch identifier when known |
+| `session_id` | string | Harness session ID when known |
+
+`agent-mux status` marks a live dispatch as `orphaned` when `host.pid` exists but the process is no longer alive.
 
 ## Collecting Results
 
-### agent-mux wait
+Use the lifecycle commands after the ack:
 
-Blocks until an async dispatch reaches a terminal state. Reads `status.json` from the artifact directory on a polling loop.
+- `agent-mux status <dispatch_id>` for current live or durable status
+- `agent-mux result <dispatch_id>` for the stored response
+- `agent-mux inspect <dispatch_id>` for response, artifacts, and metadata together
+- `agent-mux wait <dispatch_id>` to block on `~/.agent-mux/dispatches/<dispatch_id>/result.json`
 
-```bash
-agent-mux wait 01JQXYZ --poll 5s
-```
+`agent-mux result` blocks by default if the dispatch is still running. `agent-mux wait` polls the persistent `result.json` path and emits progress lines to stderr between polls.
 
-| Flag | Default | Purpose |
-| --- | --- | --- |
-| `--poll` | `60s` | Check interval |
-| `--config` | standard | Config resolution for poll_interval fallback |
-| `--cwd` | current dir | Working directory for config lookup |
+## Event Streaming
 
-Poll interval precedence: CLI `--poll` flag > `[async].poll_interval` in config.toml > hardcoded default (60s).
+All structured events are appended to `<artifact_dir>/events.jsonl`.
 
-Prints the final `DispatchResult` JSON to stdout on completion.
+stderr behavior depends on flags:
 
-### agent-mux result
+- default: only the silent-mode subset is written to stderr
+- `--stream` or `-S`: all structured events are written to stderr
+- `--verbose` or `-v`: all structured events plus raw harness lines are written to stderr
 
-Retrieves the dispatch response. If the dispatch is still running, blocks until completion by default.
-
-```bash
-agent-mux result 01JQXYZ          # blocks until done, prints response
-agent-mux result 01JQXYZ --no-wait  # returns error if still running
-agent-mux result --artifacts 01JQXYZ  # lists artifact files instead
-```
-
-Falls back to `full_output.md` in the artifact directory for truncated or legacy dispatches.
-
-## status.json
-
-The artifact directory contains a `status.json` file updated throughout the run. This is the primary observability path for programmatic callers that do not want to parse the event stream.
-
-Fields:
-
-| Field | Type | Description |
-| --- | --- | --- |
-| `state` | string | `running`, `completed`, `failed`, `timed_out`, `orphaned` |
-| `elapsed_s` | int | Seconds since dispatch start |
-| `last_activity` | string | Description of the most recent activity |
-| `tools_used` | int | Number of tool calls observed |
-| `files_changed` | int | Number of file writes observed |
-| `dispatch_id` | string | Dispatch identifier |
-| `session_id` | string | Harness session ID when established |
-
-`orphaned` state is set by `agent-mux status` when the host PID recorded in `host.pid` is no longer alive but the dispatch was never marked terminal.
-
-Completion is defined by `result.json` appearing under `~/.agent-mux/dispatches/<dispatch_id>/`, not by `status.json` alone. `agent-mux wait` polls for `result.json` on each interval tick.
-
-## Streaming Protocol v2
-
-### Default: Silent Mode
-
-Only bookend events (`dispatch_start`, `dispatch_end`) and failure/error events are emitted to stderr. This keeps the CLI quiet for programmatic callers.
-
-All events are still written to `events.jsonl` in the artifact directory for post-hoc inspection via `agent-mux inspect`.
-
-### --stream / -S
-
-Passing `--stream` restores full event streaming to stderr: heartbeats, tool_start, tool_end, file_write, progress, and all other event types. Useful for human debugging and real-time monitoring.
-
-### Event Types
-
-All 13+ event types carry a common envelope:
+The shared event envelope is:
 
 ```json
 {
   "schema_version": 1,
   "type": "<event_type>",
-  "dispatch_id": "<ulid>",
-  "ts": "2026-03-28T10:00:00Z"
+  "dispatch_id": "01K...",
+  "ts": "2026-04-03T10:00:00Z"
 }
 ```
 
-| Type | Key Fields |
-| --- | --- |
-| `dispatch_start` | `engine`, `model`, `effort`, `timeout_sec`, `grace_sec`, `cwd`, `skills` |
-| `dispatch_end` | `status`, `duration_ms` |
-| `heartbeat` | `elapsed_s`, `interval_s`, `last_activity` |
-| `tool_start` | `tool`, `args` |
-| `tool_end` | `tool`, `duration_ms` |
-| `file_write` | `path` |
-| `file_read` | `path` |
-| `command_run` | `command` |
-| `progress` | `message` |
-| `timeout_warning` | `message` |
-| `frozen_warning` | `silence_seconds`, `message` |
-| `long_command_detected` | `command`, `timeout_seconds`, `message` |
-| `info` | `error_code` (as info code), `message` |
-| `error` | `error_code`, `message` |
-| `coordinator_inject` | `message` |
-
-The `info` type carries diagnostic codes like `stdin_nudge`. Heartbeats are emitted every 15 seconds (configurable) and carry `last_activity` for liveness context.
+Common event types include `dispatch_start`, `dispatch_end`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `file_read`, `command_run`, `progress`, `timeout_warning`, `frozen_warning`, `long_command_detected`, `info`, `warning`, `error`, and `coordinator_inject`.
 
 ## Cross-References
 
-- [Architecture](./architecture.md) for the event emitter and supervision model
-- [Dispatch](./dispatch.md) for the DispatchResult contract
-- [Steering](./steering.md) for mid-flight control over async dispatches
-- [Lifecycle](./lifecycle.md) for `list`, `status`, `inspect` commands
-- [Recovery](./recovery.md) for artifact directory layout
+- [dispatch.md](./dispatch.md) for `DispatchSpec` and `DispatchResult`
+- [lifecycle.md](./lifecycle.md) for `list`, `status`, `result`, `inspect`, and `wait`
+- [recovery.md](./recovery.md) for `_dispatch_ref.json`, `meta.json`, and `result.json`

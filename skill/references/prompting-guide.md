@@ -1,6 +1,7 @@
 # Prompting Guide
 
-Per-engine prompt patterns, context loading, and dispatch/wait/result workflow.
+Per-engine prompt patterns, auto-injected context, and reliable dispatch
+workflows.
 
 ---
 
@@ -8,12 +9,13 @@ Per-engine prompt patterns, context loading, and dispatch/wait/result workflow.
 
 Every dispatch prompt should provide:
 
-1. **One job** — a single deliverable, not a compound task
-2. **Explicit scope** — files, directories, boundaries
-3. **A verification gate** — how the worker proves it is done
-4. **A clear output shape** — what to report back
+1. one job
+2. explicit scope
+3. hard constraints
+4. a verification gate
+5. a clear output shape
 
-Default prompt frame:
+Good default frame:
 
 ```text
 Goal:
@@ -23,196 +25,219 @@ Verification gate:
 Expected output:
 ```
 
-Do not spend tokens explaining agent-mux to the worker. The worker already
-has the harness and artifact directory. Prompt the task, not the tool.
+Do not spend tokens explaining agent-mux to the worker. The worker already has
+the harness, artifact dir, and any injected preamble.
+
+---
+
+## Auto-Injected Preamble
+
+agent-mux may prepend one or both of these lines before the prompt:
+
+- `Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.`
+- `Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.`
+
+Implications:
+
+- if you pass `--context-file` or `context_file`, the worker is already told to read it
+- if the run has an artifact dir, the worker is already told where to write scratch files
+
+Do not repeat those lines unless you need something more specific, such as a
+required filename under `$AGENT_MUX_ARTIFACT_DIR`.
 
 ---
 
 ## Codex Prompting
 
-Codex executes precision. Give it surgical scope and it delivers clean work.
-Give it ambiguity and it hallucinates scope or stalls.
+Codex works best with narrow, execution-oriented prompts.
 
 ### What works
 
-- Exact file paths (never "explore src/")
-- Concrete edits with clear boundaries
-- Specific commands to run after the edit
-- A hard verification gate
-- One deliverable per dispatch
+- exact file paths
+- concrete edits with clear boundaries
+- explicit commands to run after the edit
+- a hard verification gate
+- one deliverable per dispatch
 
 ### What fails
 
-- "Explore the repo and tell me what you find"
-- Multi-goal prompts with fuzzy priorities
-- Hidden verification expectations
-- Prompts that require discovering scope
+- open-ended repo exploration
+- multiple goals with fuzzy priorities
+- implied tests or output requirements
+- prompts that require the worker to discover scope first
 
 ### Recommended shape
 
 ```text
-Implement X in these files:
-- src/parser.go
-- internal/parser/types.go
+Implement retry backoff in:
+- src/client/retry.go
+- src/client/retry_test.go
 
 Constraints:
 - do not change public API names
-- keep changes under 150 LOC
+- keep the retry schedule deterministic in tests
 
 Verification gate:
-- go test ./internal/parser ./cmd/tool passes
-- malformed input now returns ErrInvalidToken
+- go test ./src/client passes
+- retry count remains capped at 5
 
-Report: what changed, which tests ran, any follow-up risk
+Expected output:
+- short summary
+- tests run
+- remaining risk
+```
+
+If you need scratch notes, say so directly:
+
+```text
+Write any work log or intermediate notes to $AGENT_MUX_ARTIFACT_DIR/retry-plan.md.
 ```
 
 ---
 
 ## Claude Prompting
 
-Claude handles ambiguity, planning, synthesis, and review.
+Claude is better for planning, synthesis, review, and ambiguous problem
+framing.
 
 ### Recommended shape
 
 ```text
-Task: Pressure-test the migration plan for auth.
-Scope: read the plan, identify top 3 failure modes, propose safer rollout.
-Output: verdict first, then revised sequence, then open questions.
+Task: Pressure-test the auth migration plan.
+Scope: read the current plan, identify the top 3 failure modes, propose a safer rollout.
+Expected output: verdict first, then revised sequence, then open questions.
 ```
 
-For read-only work, use `--permission-mode=plan` or the appropriate role.
-If the job is implementation at its core, plan in Claude and hand coding
-to Codex via a second dispatch.
+Use Claude when the main work is reasoning. If the end goal is code changes,
+plan with Claude and hand the implementation to Codex in a second dispatch.
 
 ---
 
 ## Gemini Prompting
 
-Best as a fast alternate take, not primary implementation.
+Gemini is best used as a narrow contrast pass.
 
 ### Recommended shape
 
 ```text
-Review this patch for hidden risks.
+Review this patch for hidden rollout risks.
 Focus on: backwards compatibility, deployment hazards, missing tests.
 Keep the answer to 5 bullets max.
 ```
 
-Keep Gemini prompts narrower than Claude prompts. Treat as a contrast probe.
+Keep Gemini prompts narrower than Claude prompts.
 
 ---
 
-## Context-Loading Tools
+## Context Loading Tools
 
-### --skill / "skills"
+### `--skill` / `skills`
 
-Reusable runbooks from named skill directories. Keeps prompts composable.
+Use named skill directories for reusable runbooks.
+
 ```json
-{"role":"lifter","skills":["react","test-writer"],"prompt":"...","cwd":"/repo"}
+{
+  "role": "lifter",
+  "skills": ["react", "test-writer"],
+  "prompt": "...",
+  "cwd": "/repo"
+}
 ```
 
-### --context-file / "context_file"
+### `--context-file` / `context_file`
 
-Large briefs already written to disk. Injects preamble telling worker to
-read `$AGENT_MUX_CONTEXT` before starting.
+Use for large briefs already written to disk. agent-mux sets
+`AGENT_MUX_CONTEXT` and adds the read preamble automatically.
 
-### system_prompt / "system_prompt"
+### `system_prompt` / `--system-prompt`
 
-Run-level framing, not giant manuals:
+Use for run-level framing, not giant manuals.
+
 ```json
-{"role":"auditor","system_prompt":"Prioritize regressions over style","prompt":"..."}
+{
+  "role": "auditor",
+  "system_prompt": "Prioritize regressions over style.",
+  "prompt": "Review the patch."
+}
 ```
 
-### --profile / "profile"
+### `--profile` / `profile`
 
-Persistent personas with default engine/model. Put stable persona in the
-body, dynamic task in the prompt.
+Use for stable coordinator personas with default engine/model/skills.
+
+### `--stdin`
+
+When using `--stdin`, put dispatch fields in JSON. The CLI is only carrying
+transport flags like `--stdin`, `--async`, `--stream`, `--verbose`, `--yes`,
+and `--config`.
 
 ---
 
-## Dispatch -> Wait -> Result Pattern
+## Dispatch -> Wait -> Result
 
-The canonical multi-step workflow using explicit dispatch/wait/result
-sequences.
-
-### Sequential handoff (2 workers)
+### Sequential handoff
 
 ```bash
-# Step 1: Plan
 ID1=$(agent-mux -R=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
 
-# Wait for plan
-agent-mux wait --poll 30s $ID1 2>/dev/null
+agent-mux wait --poll 30s "$ID1" 2>/dev/null
 
-# Read plan output
-PLAN=$(agent-mux result $ID1 --json 2>/dev/null | jq -r .response)
+PLAN=$(agent-mux result --json "$ID1" 2>/dev/null | jq -r .response)
 
-# Step 2: Implement (using plan as context)
-printf '{"role":"lifter","prompt":"Implement this plan:\n%s","cwd":"/repo"}' "$PLAN" \
+printf '%s' "{\"role\":\"lifter\",\"prompt\":\"Implement this plan:\\n$PLAN\",\"cwd\":\"/repo\"}" \
   | agent-mux --stdin --async 2>/dev/null
 ```
 
-### Sequential handoff via context file
+### Handoff via context file
 
 ```bash
-# Step 1: produce output
 ID1=$(agent-mux -R=architect --async -C=/repo "Design the auth migration" 2>/dev/null | jq -r .dispatch_id)
-agent-mux wait --poll 30s $ID1 2>/dev/null
+agent-mux wait "$ID1" 2>/dev/null
+agent-mux result "$ID1" 2>/dev/null > /tmp/plan.md
 
-# Write plan to file
-agent-mux result $ID1 2>/dev/null > /tmp/plan.md
-
-# Step 2: consume via context_file
-agent-mux -R=lifter --async --context-file=/tmp/plan.md -C=/repo "Implement the plan at \$AGENT_MUX_CONTEXT" 2>/dev/null
+agent-mux -R=lifter --async --context-file=/tmp/plan.md -C=/repo \
+  'Implement the plan at $AGENT_MUX_CONTEXT' 2>/dev/null
 ```
 
 ### Parallel fan-out
 
 ```bash
-# Launch parallel workers
 ID1=$(agent-mux -R=scout --async -C=/repo "Scan auth module" 2>/dev/null | jq -r .dispatch_id)
 ID2=$(agent-mux -R=scout --async -C=/repo "Scan API layer" 2>/dev/null | jq -r .dispatch_id)
 ID3=$(agent-mux -R=scout --async -C=/repo "Scan DB layer" 2>/dev/null | jq -r .dispatch_id)
 
-# Wait for all
-agent-mux wait $ID1 2>/dev/null
-agent-mux wait $ID2 2>/dev/null
-agent-mux wait $ID3 2>/dev/null
-
-# Collect results
-R1=$(agent-mux result $ID1 --json 2>/dev/null | jq -r .response)
-R2=$(agent-mux result $ID2 --json 2>/dev/null | jq -r .response)
-R3=$(agent-mux result $ID3 --json 2>/dev/null | jq -r .response)
+agent-mux wait "$ID1" 2>/dev/null
+agent-mux wait "$ID2" 2>/dev/null
+agent-mux wait "$ID3" 2>/dev/null
 ```
+
+`wait` is the completion primitive. Do not poll `status --json` in a loop.
 
 ---
 
-## Recovery Phrasing
+## Recovery and Steering Phrasing
 
-`--recover` already builds a continuation prompt listing old artifacts.
-Your prompt should be the delta.
+### Recovery prompt
 
-- Good: "Continue by finishing test coverage for the parser"
-- Bad: "Re-explain the entire project from scratch"
+`--recover` already injects the prior dispatch ID, engine/model, status, and
+artifact list. Your prompt should only describe the delta.
 
-### Signal phrasing
+- Good: `Finish the remaining parser tests and summarize what is still missing.`
+- Bad: `Re-explain the whole project from scratch.`
 
-Signals become a short resumed turn. Keep them crisp.
+### Signal / steer phrasing
 
-- Good: "Focus on auth paths only; skip docs."
-- Good: "Stop after green tests and summarize remaining edge cases."
-- Bad: Multi-paragraph redesigns or contradictory instructions.
+Signals and steer messages should be short.
+
+- Good: `Focus on auth paths only; skip docs.`
+- Good: `Stop after green tests and summarize remaining edge cases.`
+- Bad: multi-paragraph redesign instructions
 
 ---
 
 ## Flag Hygiene
 
-1. **Use `=` for all string-value flags.** `--context-file=/path`, `-C=/repo`.
-   Space-separated form can cause Go's flag parser to consume the next flag as the value.
-2. **Flags before positional args.** `agent-mux wait --poll 30s <id>`, not
-   `agent-mux wait <id> --poll 30s`. Go's flag parser stops at the first
-   positional argument.
-3. **Escape `$AGENT_MUX_ARTIFACT_DIR` in prompts.** This env var is set in
-   the worker's environment, not the coordinator's. Use `\$` or single quotes.
-4. **Always `2>/dev/null`.** stderr carries diagnostic events, not output.
-   Parse stdout as JSON.
+1. Put flags before positional args. `agent-mux wait --poll 30s <id>`, not `agent-mux wait <id> --poll 30s`.
+2. In `--stdin` mode, put dispatch fields in JSON rather than mixing in CLI dispatch flags.
+3. Escape worker env vars in coordinator-shell prompts when needed. Use `\$AGENT_MUX_CONTEXT` or single quotes so your shell does not expand them early.
+4. When you need machine-readable output, redirect stderr away and parse stdout JSON. Example: `2>/dev/null`.

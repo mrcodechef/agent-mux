@@ -11,7 +11,7 @@ The principles below are already reflected in code. Each one has an implementati
 | Principle | Implementation implication |
 | --- | --- |
 | Tool, not orchestrator | `cmd/agent-mux/main.go` resolves inputs and dispatches; it does not decide strategy beyond materializing one dispatch request. |
-| Job done is holy | `internal/dispatch.EnsureArtifactDir` and `WriteDispatchMeta` run before process spawn so artifacts exist even if the harness later fails. |
+| Job done is holy | `internal/dispatch.EnsureArtifactDir` and `dispatch.RegisterDispatchSpec(...)` establish the artifact/control path before the harness starts, and `LoopEngine.Dispatch` persists dispatch refs before process spawn. |
 | Errors are steering signals | `internal/dispatch.ErrorCatalog` normalizes failures into codes, messages, suggestions, and retryability for the caller. |
 | Single-shot with curated context first | The default path is one `types.DispatchSpec` into one `engine.LoopEngine`. |
 | Simplest viable dispatch | CLI flags, stdin JSON, role overlays, and timeout buckets resolve into a single materialized spec before execution. The engine loop does not keep reinterpreting config at runtime. |
@@ -23,7 +23,9 @@ The principles below are already reflected in code. Each one has an implementati
 
 **Why a single binary with adapters.** Codex CLI, Claude Code, and Gemini CLI differ in flags, auth expectations, and event formats, but their control loop is the same: build args, start a process, parse streaming output, supervise liveness, and assemble a normalized result. `types.HarnessAdapter` captures exactly that seam. `internal/engine` owns lifecycle and restart logic once, while `internal/engine/adapter` owns only engine-specific translation.
 
-**Why artifact-first.** A dispatch can produce valuable output before it produces a clean final response. agent-mux therefore treats the artifact directory as part of the execution contract, not as post-processing. The prompt preamble points workers at `$AGENT_MUX_ARTIFACT_DIR`, `_dispatch_meta.json` is written at start, `events.jsonl` is appended throughout the run, and result assembly scans artifacts regardless of terminal state. This keeps partial work observable after timeouts, freezes, or caller interruption. A separate durable store at `~/.agent-mux/dispatches/<dispatch_id>/` (`meta.json` + `result.json`) provides a queryable, home-directory-stable record of every dispatch independent of the artifact directory lifecycle.
+**Why artifact-first.** A dispatch can produce valuable output before it produces a clean final response. agent-mux therefore treats the artifact directory as part of the execution contract, not as post-processing. The prompt preamble points workers at `$AGENT_MUX_ARTIFACT_DIR`, `cmd/agent-mux` registers the dispatch before launch, `LoopEngine.Dispatch` writes `_dispatch_ref.json` and starts `events.jsonl`, and result assembly scans artifacts regardless of terminal state. This keeps partial work observable after timeouts, freezes, or caller interruption. A separate durable store at `~/.agent-mux/dispatches/<dispatch_id>/` (`meta.json` + `result.json`) provides a queryable, home-directory-stable record of every dispatch independent of the artifact directory lifecycle, while the artifact directory carries run-local files such as `status.json`, `inbox.md`, and user-written artifacts.
+
+**Why a unified steering package.** Steering now lives under `internal/steer`. The package exposes `Delivery{InboxDir, FIFOPath}` plus the lower-level inbox and FIFO helpers used by the engine and CLI. The inbox path is the durable, portable steering mechanism; the FIFO path is a Unix-only optimization for live Codex nudges and redirects. Keeping both channels in one package avoids split ownership between durable coordinator messages and low-latency soft steering.
 
 **Why no runtime budget enforcement.** The system reports token and cost metadata, but it does not kill a run based on live budget counters. The underlying harnesses emit usage information only at coarse boundaries, often after meaningful work has already happened. Wall-clock timeout is enforceable and predictable; runtime token policing would be approximate, engine-specific, and likely to terminate useful work mid-tool-call. The design keeps budgets as telemetry and leaves policy to the caller.
 
@@ -68,17 +70,16 @@ codex binary      claude binary      gemini binary
 
 | Package | Owns |
 | --- | --- |
-| `cmd/agent-mux/main.go` | CLI flag parsing, mode detection, spec construction |
-| `internal/config` | TOML loading, merge semantics, role and variant resolution |
+| `cmd/agent-mux` | CLI commands, spec construction, stdin/async/recover/steer entry points |
+| `internal/config` | Config loading, merge semantics, role resolution, skill loading, timeout defaults |
 | `internal/types` | Shared contracts: `DispatchSpec`, `DispatchResult`, `HarnessEvent`, `HarnessAdapter` |
-| `internal/engine` | `LoopEngine` process lifecycle, event loop, timeout/watchdog/inbox handling |
+| `internal/dispatch` | Artifact directory setup, persistent meta/result store, recovery helpers, live status I/O |
+| `internal/steer` | Unified steering delivery: `Delivery`, inbox helpers, FIFO helpers |
+| `internal/hooks` | Deny and warn pattern evaluation, prompt safety preamble injection |
+| `internal/engine` | `LoopEngine` process lifecycle, event loop, timeout/watchdog logic, resume/restart, soft-stdin bridge |
 | `internal/engine/adapter` | Adapter registry plus `CodexAdapter`, `ClaudeAdapter`, `GeminiAdapter` |
 | `internal/supervisor` | `exec.Cmd` wrapper with process-group startup and signal handling |
 | `internal/event` | `Emitter` NDJSON formatting, heartbeat ticker, dual-sink streaming |
-| `internal/dispatch` | Traceability, artifact directory management, dispatch metadata |
-| `internal/recovery` | Control records, artifact directory resolution, recovery prompt construction |
-| `internal/inbox` | Append-under-lock inbox writes and atomic read-and-clear |
-| `internal/hooks` | Deny and warn pattern evaluation, prompt safety preamble injection |
 
 ## Real Types
 
@@ -169,7 +170,7 @@ skill injection
   |
   v
 context and recovery augmentation
-  `-> context preamble + recovery.BuildRecoveryPrompt(...)
+  `-> context preamble + dispatch.BuildRecoveryPrompt(...) when --recover is set
   |
   v
 hook prompt check
@@ -180,17 +181,21 @@ safety preamble injection
   `-> hooks.Evaluator.PromptInjection()
   |
   v
-traceability and artifact setup
-  `-> dispatch.WriteDispatchMeta(...)
-  `-> recovery.RegisterDispatchSpec(...)
-  |
-  v
 adapter selection
   `-> adapter.Registry.Get(spec.Engine)
   |
+  v
+dispatch registration
+  `-> dispatch.EnsureArtifactDir(...)
+  `-> dispatch.RegisterDispatchSpec(...)
+  |
+  v
 single dispatch path
   `-> engine.NewLoopEngine(...)
   `-> LoopEngine.Dispatch(...)
+     -> dispatch.WritePersistentMeta(...)
+     -> dispatch.WriteDispatchRef(...)
+     -> steer.CreateInbox(...)
   |
   v
 process spawn
@@ -234,12 +239,15 @@ The important invariant is that mutable run state such as `lastResponse`, `sessi
 
 Process termination is handled at the process-group level. `internal/supervisor.NewProcess` sets `SysProcAttr{Setpgid: true}` so a harness and any subprocesses share a group, and `signalGroup` uses `syscall.Kill(-pgid, sig)` when available. `GracefulStop` sends `SIGTERM`, waits for the configured grace interval, then escalates to `SIGKILL` if the process group is still alive.
 
-Inbox steering is intentionally decoupled from stdout parsing. Messages may be observed in two places:
+Steering is intentionally split into two delivery paths inside `internal/steer`: the durable inbox and the optional `stdin.pipe` FIFO bridge for live Codex soft steering.
+
+Inbox messages may be observed in three places:
 
 - opportunistically inside `scanHarnessOutput`, immediately after a line arrives
 - on the `250ms` inbox ticker, which prevents a quiet harness from starving coordinator input
+- on the `5s` watchdog ticker, which gives the loop another chance to drain queued coordinator input
 
-That dual path matters because resume only works if steering can arrive while the harness is idle as well as while it is actively emitting output.
+That dual path matters because resume only works if steering can arrive while the harness is idle as well as while it is actively emitting output. The FIFO path is separate: when `status.json` reports `stdin_pipe_ready`, the loop can decode a soft-steer envelope and write formatted input directly to the live Codex stdin pipe without a stop-and-resume cycle.
 
 ## Lifecycle Notes
 
@@ -250,7 +258,7 @@ The engine loop handles four terminal outcomes:
 - failed
 - interrupted
 
-Each terminal path writes status, updates `_dispatch_meta.json` in the artifact directory, and writes `result.json` to the durable store at `~/.agent-mux/dispatches/<dispatch_id>/`, keeping artifact discovery on the result. The only difference is which `dispatch.Build*Result` constructor is used and what error payload, if any, is attached. Store records are written via tmp-file + fsync + rename before the terminal status event is emitted to prevent observers from reading a status ahead of a queryable record.
+Each terminal path writes `result.json` to the durable store at `~/.agent-mux/dispatches/<dispatch_id>/` and then writes terminal `status.json` in the artifact directory, keeping artifact discovery on the result. The only difference is which `dispatch.Build*Result` constructor is used and what error payload, if any, is attached. Store records are written via tmp-file + fsync + rename before the terminal status event is emitted to prevent observers from reading a status ahead of a queryable record. `ReadDispatchMeta` still understands legacy `_dispatch_meta.json`, but current runs use `_dispatch_ref.json` plus the persistent store as the primary metadata path.
 
 After the waiter goroutine signals process exit (`streamDone`), the loop performs a second drain pass on the scanner channel. This catches `EventResponse` and other events that were emitted between the last scanner read and process exit — a narrow race on clean harness exits that previously caused the final response to be silently dropped.
 
@@ -263,8 +271,8 @@ Some package splits are structural rather than cosmetic:
 - `internal/config` resolves intent; it does not execute anything
 - `internal/engine` executes one run; it does not know TOML merge rules
 - `internal/engine/adapter` normalizes engine-specific behavior; it does not own lifecycle
-- `internal/dispatch` owns traceability and artifact metadata; it is used before and after process execution
-- `internal/recovery` rehydrates prior runs using control records and artifact metadata, not in-memory state
+- `internal/dispatch` owns traceability, persistent records, artifact resolution, recovery prompt construction, and live status; there is no separate `internal/recovery` package
+- `internal/steer` owns inbox and FIFO steering together; there are no separate `internal/inbox` or `internal/fifo` packages
 
 This separation keeps new engine support, new config surfaces, and loop changes from collapsing into one package.
 
@@ -274,6 +282,6 @@ This separation keeps new engine support, new config surfaces, and loop changes 
 - [Engines](./engines.md) for adapter behavior and per-harness differences
 - [Config](./config.md) for merge order, roles, variants, skills, and timeout buckets
 - [Pipelines](./pipelines.md) for `PipelineConfig`, fan-out, and handoff modes
-- [Recovery](./recovery.md) for control records, inbox signaling, and recovery prompts
+- [Recovery](./recovery.md) for control records, dispatch recovery, and continuation prompts
 - [Lifecycle](./lifecycle.md) for statuses, events, timeout escalation, and supervision states
 - [CLI Reference](./cli-reference.md) for commands, flags, and stdin mode

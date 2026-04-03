@@ -1,45 +1,22 @@
 # TOML Config Guide
 
-## Contents
-
-- Config file locations and resolution
-- Config structure
-- Roles and variants
-- Coordinator/profile system
-- Skill injection
-- Async configuration
-
----
-
 ## Config File Locations
 
-Source of truth: `internal/config/config.go` -- `configPaths()`.
+Source of truth: `internal/config/config.go` and its `configPaths()` function.
 
-Config files are TOML. Loaded in order (later wins on conflicts):
+Implicit discovery checks exactly two files, in order:
 
-1. **Global:** `~/.agent-mux/config.toml`
-   (legacy fallback: `~/.config/agent-mux/config.toml` -- emits deprecation warning)
-2. **Global machine-local:** `~/.agent-mux/config.local.toml`
-3. **Project:** `<cwd>/.agent-mux/config.toml`
-4. **Project machine-local:** `<cwd>/.agent-mux/config.local.toml`
-5. **Explicit:** `--config <path>` (file or directory -- skips implicit lookup above)
+1. `~/.agent-mux/config.toml`
+2. `<cwd>/.agent-mux/config.toml`
 
-The `config.local.toml` files are machine-local overlays for per-machine
-secrets, model overrides, or environment-specific settings. Add them to
-`.gitignore`.
+Project config overlays global config. Missing files are skipped.
 
-When `--config` points to a directory, it looks for
-`<dir>/.agent-mux/config.toml` then `<dir>/config.toml`.
+If `--config <path>` is set, implicit discovery is skipped:
 
-When `--profile` is set and a companion `<name>.toml` exists beside
-`<name>.md`, that TOML is merged into config after project config but before
-role resolution.
-
----
+- file path: load that file
+- directory path: try `<dir>/.agent-mux/config.toml`, then `<dir>/config.toml`
 
 ## Config Structure
-
-Source of truth: `config.Config` struct in `internal/config/config.go`.
 
 ```toml
 [defaults]
@@ -51,10 +28,7 @@ permission_mode = ""
 max_depth = 2
 
 [skills]
-search_paths = [
-  "~/.claude/skills",
-  "~/thinking/pratchett-os/coordinator/.claude/skills",
-]
+search_paths = ["~/.claude/skills"]
 
 [liveness]
 heartbeat_interval_sec = 15
@@ -69,238 +43,130 @@ xhigh = 2700
 grace = 60
 
 [models]
-codex = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
-claude = ["claude-opus-4-6", "claude-sonnet-4-6"]
-gemini = ["gemini-3-flash-preview", "gemini-3.1-pro-preview"]
+codex = ["gpt-5.4", "gpt-5.4-mini"]
+claude = ["claude-sonnet-4-6"]
 
 [hooks]
-deny = ["DROP TABLE", "vault.sh export"]
-warn = ["rm -rf", "git push --force", "curl", "wget"]
+pre_dispatch = ["./.agent-mux/hooks/pre-dispatch.sh"]
+on_event = ["./.agent-mux/hooks/on-event.sh"]
 event_deny_action = "kill"
 
 [async]
 poll_interval = "60s"
 
-[roles.NAME]
+[roles.scout]
 engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-timeout = 1800
-skills = ["skill-name"]
-system_prompt_file = "prompts/role.md"
-
-[roles.NAME.variants.VARIANT]
-engine = "claude"
-model = "claude-sonnet-4-6"
-# Any field from the role can be overridden
+model = "gpt-5.4-mini"
+effort = "low"
+timeout = 180
+skills = ["repo-map"]
+system_prompt_file = "prompts/scout.md"
 ```
 
-### Defaults Section
+### Section Reference
 
-Source: `config.DefaultsConfig` struct.
+| Section | Fields |
+| --- | --- |
+| `[defaults]` | `engine`, `model`, `effort`, `sandbox`, `permission_mode`, `max_depth` |
+| `[skills]` | `search_paths` |
+| `[liveness]` | `heartbeat_interval_sec`, `silence_warn_seconds`, `silence_kill_seconds` |
+| `[timeout]` | `low`, `medium`, `high`, `xhigh`, `grace` |
+| `[models]` | `<engine> = [...]` |
+| `[hooks]` | `pre_dispatch`, `on_event`, `event_deny_action` |
+| `[async]` | `poll_interval` |
+| `[roles.<name>]` | Flat role definitions |
 
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `engine` | string | - | Default engine when not specified |
-| `model` | string | - | Default model |
-| `effort` | string | `high` | Default effort level |
-| `sandbox` | string | `danger-full-access` | Codex sandbox mode |
-| `permission_mode` | string | - | Claude/Gemini permission mode |
-| `max_depth` | int | 2 | Recursive dispatch limit |
+### Merge Behavior
 
-### Skills Section
+| What | Rule |
+| --- | --- |
+| Scalars in `[defaults]`, `[liveness]`, `[timeout]`, `[async]` | Last explicit definition wins |
+| `[skills].search_paths` | Deduplicated append |
+| `[models].<engine>` | Deduplicated append |
+| `[hooks].pre_dispatch`, `[hooks].on_event` | Deduplicated append |
+| `[hooks].event_deny_action` | Last explicit definition wins |
+| Existing roles | Deep-merged per field |
+| `roles.<name>.skills` | Whole-list replacement when explicitly defined |
 
-Source: `config.SkillsConfig` struct.
+## Roles
 
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `search_paths` | string[] | `[]` | Additional directories to search for skills. Tilde (`~`) expansion supported. |
-
-Search paths from all config layers are union-merged with dedup.
-
-### Liveness Section
-
-Source: `config.LivenessConfig` struct.
-
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `heartbeat_interval_sec` | int | 15 | Heartbeat emission interval |
-| `silence_warn_seconds` | int | 90 | Emit `frozen_warning` after this silence |
-| `silence_kill_seconds` | int | 180 | Kill harness after this silence |
-
-### Timeout Section
-
-Source: `config.TimeoutConfig` struct.
-
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `low` | int | 120 | Timeout for low effort (seconds) |
-| `medium` | int | 600 | Timeout for medium effort |
-| `high` | int | 1800 | Timeout for high effort |
-| `xhigh` | int | 2700 | Timeout for xhigh effort |
-| `grace` | int | 60 | Grace period after soft timeout |
-
-All timeout values are validated to be positive integers when explicitly set in config. Zero/negative values produce a `ValidationError`.
-
-### Models Section
-
-Maps engine name to list of valid model strings. Used for model validation.
-
-### Hooks Section
-
-Source: `config.HooksConfig` struct.
-
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `deny` | string[] | `[]` | Block prompts/events matching these patterns |
-| `warn` | string[] | `[]` | Inject caution text for matching patterns |
-| `event_deny_action` | string | `""` | `"kill"` or `"warn"` for event matches (empty defaults to kill) |
-
-### Async Section
-
-Source: `config.AsyncConfig` struct.
-
-| Key | Type | Default | Notes |
-|-----|------|---------|-------|
-| `poll_interval` | string | `""` | Go duration (e.g. `60s`, `5m`). Used by `ax wait`. Falls back to 60s. |
-
----
-
-## Roles and Variants
-
-### Role Fields
-
-Source: `config.RoleConfig` struct.
+Source: `config.RoleConfig` in `internal/config/config.go`.
 
 | Field | Type | Notes |
-|-------|------|-------|
+| --- | --- | --- |
 | `engine` | string | Override default engine |
 | `model` | string | Override default model |
 | `effort` | string | Override default effort |
-| `timeout` | int | Override timeout (seconds); must be > 0 when set |
-| `skills` | string[] | Skills to inject (merged with CLI `--skill`) |
-| `system_prompt_file` | string | Path to system prompt file (relative to config dir) |
+| `timeout` | int | Override timeout in seconds; must be `> 0` when set |
+| `skills` | string[] | Skills injected for this role |
+| `system_prompt_file` | string | Relative file under the role's config source directory |
 
-### Variant Fields
+Roles are flat entries in `[roles]`. Names like `lifter-claude` are just role names.
 
-Source: `config.RoleVariant` struct. Same fields as `RoleConfig` (except no nested variants).
+`agent-mux config roles` lists those flat names directly from `cfg.Roles`.
 
-### Variant Resolution
+`system_prompt_file` must be relative. Absolute paths are rejected. If the value is a bare filename, agent-mux also tries `prompts/<filename>` under the same config source directory.
 
-Variants inherit all fields from the parent role, then override only the
-fields they explicitly set.
+## Hooks
+
+Source: `internal/hooks/hooks.go`.
+
+Hooks are executable scripts:
 
 ```toml
-[roles.lifter]
-engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-timeout = 1800
-
-[roles.lifter.variants.claude]
-engine = "claude"
-model = "claude-sonnet-4-6"
-# effort and timeout inherited from parent
+[hooks]
+pre_dispatch = ["./.agent-mux/hooks/pre-dispatch.sh"]
+on_event = ["./.agent-mux/hooks/on-event.sh"]
+event_deny_action = "warn"
 ```
 
-Dispatch with variant:
-```json
-{"role":"lifter","variant":"claude","prompt":"...","cwd":"/repo"}
-```
+Behavior:
 
----
+- Scripts receive JSON on `stdin`.
+- Pre-dispatch env vars: `HOOK_PHASE`, `HOOK_PROMPT`, `HOOK_SYSTEM_PROMPT`
+- Event env vars: `HOOK_PHASE`, `HOOK_COMMAND`, `HOOK_FILE_PATH`, `HOOK_TOOL`, `HOOK_TEXT`
+- Exit `0` allows.
+- Exit `1` blocks.
+- Exit `2` warns.
+- For event hooks, a block becomes `warn` instead of `deny` only when `event_deny_action = "warn"`.
 
-## Coordinator/Profile System
+## Profiles
 
-### Profile Search Order
+Source: `internal/config/coordinator.go`.
 
-Source: `internal/config/coordinator.go` -- `LoadProfile()`.
-
-When `--profile=name` (or JSON `"profile":"name"` / `"coordinator":"name"`),
-searches for `<name>.md` in:
+`--profile=name` loads `<name>.md` from:
 
 1. `<cwd>/.claude/agents/`
 2. `<cwd>/agents/`
 3. `<cwd>/.agent-mux/agents/`
 4. `~/.agent-mux/agents/`
 
-### CoordinatorSpec Fields
+Recognized frontmatter fields are `engine`, `model`, `effort`, `skills`, and `timeout`.
 
-Source: `config.CoordinatorSpec` struct.
-
-| Field | Type | Notes |
-|-------|------|-------|
-| `Name` | string | Profile name |
-| `Model` | string | From YAML frontmatter |
-| `Effort` | string | From YAML frontmatter |
-| `Engine` | string | From YAML frontmatter |
-| `Skills` | string[] | From YAML frontmatter |
-| `Timeout` | int | From YAML frontmatter |
-| `SystemPrompt` | string | Markdown body (below frontmatter) |
-
-### Profile File Format
-
-Markdown with optional YAML frontmatter:
-
-```markdown
----
-engine: claude
-model: claude-opus-4-6
-effort: high
-timeout: 900
-skills:
-  - web-search
-  - pratchett-read
----
-You are a senior code reviewer. Focus on correctness, edge cases, and test coverage.
-```
-
-Recognized frontmatter fields: `engine`, `model`, `effort`, `timeout`, `skills`.
-
-### Companion TOML
-
-If `<name>.toml` exists beside `<name>.md`, it is loaded as a config overlay.
-This lets a profile bring its own roles and hooks.
-
-### Prompt Composition
-
-When profile, system-prompt-file, and system-prompt all coexist:
-
-```
-1. Role system_prompt_file content (from role config)
-2. Profile body (from --profile markdown)
-3. System prompt file content (from --system-prompt-file CLI)
-4. Inline system prompt text (from --system-prompt / system_prompt JSON)
-```
-
----
+Profiles are markdown-only.
 
 ## Skill Injection
 
-### Resolution Order
+Source: `internal/config/skills.go`.
 
-Source: `internal/config/skills.go` -- `LoadSkills()`.
+Resolution order for `<name>/SKILL.md`:
 
-Skills are resolved by searching for `<name>/SKILL.md` in this order:
+1. `<cwd>/.claude/skills/`
+2. `<configDir>/.claude/skills/` when the role came from a different config tree
+3. configured `[skills].search_paths`
 
-1. `<cwd>/.claude/skills/<name>/SKILL.md`
-2. `<configDir>/.claude/skills/<name>/SKILL.md` (configDir = directory of the config file that defined the active role)
-3. Each path in `[skills] search_paths`: `<search_path>/<name>/SKILL.md`
+First match wins. Search paths support `~` expansion.
 
-First match wins. Tilde expansion (`~`) is supported in search_paths.
+Loaded skill content is wrapped in `<skill name="...">` blocks and prepended to the prompt. If a skill directory has `scripts/`, that directory is returned for path injection.
 
-### Behavior
-
-- Content is wrapped in `<skill name="...">` XML blocks and prepended to prompt
-- If `<skillDir>/scripts/` exists, it is added to the engine `add-dir` list (Codex `--add-dir`, Claude `--add-dir`, Gemini `--include-directories`)
-- Role skills merge with CLI/JSON skills (CLI skills first, then role skills)
-- Duplicate skill names are deduplicated
-- `--skip-skills` bypasses skill injection entirely while keeping the role's engine/model/effort/timeout
-- When a skill is not found, the error names: the missing skill, the requesting role, and all paths searched
-
-### Discovering Skills
+### Discovery Commands
 
 ```bash
-agent-mux config skills        # tabular: NAME, PATH, SOURCE
-agent-mux config skills --json # JSON array of {name, path, source}
+agent-mux config
+agent-mux config --sources
+agent-mux config roles
+agent-mux config roles --json
+agent-mux config models
+agent-mux config skills
+agent-mux config skills --json
 ```

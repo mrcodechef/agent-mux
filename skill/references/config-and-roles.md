@@ -1,27 +1,19 @@
 # Configuration and Roles
 
-TOML config structure, role authoring, variant resolution, and skill injection.
+TOML config structure, flat role authoring, profile loading, skills, and hooks.
 
 ---
 
 ## Config File Locations
 
-Loaded in order (later wins on conflicts):
+Implicit config discovery uses exactly two files, later winning on conflict:
 
-1. **Global:** `~/.agent-mux/config.toml`
-2. **Global machine-local:** `~/.agent-mux/config.local.toml`
-3. **Project:** `<cwd>/.agent-mux/config.toml`
-4. **Project machine-local:** `<cwd>/.agent-mux/config.local.toml`
+1. `~/.agent-mux/config.toml`
+2. `<cwd>/.agent-mux/config.toml`
 
-`--config <path>` is the sole source when set (skips all implicit lookup).
+`--config` is the sole config source when set.
 
-`config.local.toml` files are for machine-local secrets and model overrides.
-Add them to `.gitignore`.
-
-When `--config` points to a directory, agent-mux looks for
-`<dir>/.agent-mux/config.toml` then `<dir>/config.toml`.
-
-Legacy fallback: `~/.config/agent-mux/config.toml` (emits deprecation warning).
+There is no XDG fallback, no `config.local.toml`, and no companion merge file.
 
 ---
 
@@ -52,17 +44,32 @@ grace = 60
 poll_interval = "60s"
 
 [models]
-codex = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"]
+codex = ["gpt-5.4", "gpt-5.4-mini"]
 claude = ["claude-opus-4-6", "claude-sonnet-4-6"]
-gemini = ["gemini-3-flash-preview", "gemini-3.1-pro-preview", "gemini-2.5-pro", "gemini-2.5-flash"]
+gemini = ["gemini-2.5-pro", "gemini-3.1-pro-preview"]
 
 [hooks]
-deny = ["DROP TABLE", "vault.sh export"]
-warn = ["rm -rf", "git push --force", "curl", "wget"]
+pre_dispatch = ["~/.agent-mux/hooks/pre-dispatch.sh"]
+on_event = ["~/.agent-mux/hooks/on-event.sh"]
 event_deny_action = "kill"
 
 [skills]
-search_paths = ["~/.claude/skills", "~/thinking/pratchett-os/coordinator/.claude/skills"]
+search_paths = ["~/.claude/skills"]
+
+[roles.lifter]
+engine = "codex"
+model = "gpt-5.4"
+effort = "high"
+timeout = 1800
+skills = ["agent-mux"]
+system_prompt_file = "prompts/lifter.md"
+
+[roles.lifter-claude]
+engine = "claude"
+model = "claude-sonnet-4-6"
+effort = "high"
+timeout = 1800
+skills = ["agent-mux"]
 ```
 
 ### Section reference
@@ -71,99 +78,76 @@ search_paths = ["~/.claude/skills", "~/thinking/pratchett-os/coordinator/.claude
 |---------|--------|
 | `[defaults]` | `engine`, `model`, `effort`, `sandbox`, `permission_mode`, `max_depth` |
 | `[liveness]` | `heartbeat_interval_sec`, `silence_warn_seconds`, `silence_kill_seconds` |
-| `[timeout]` | `low`, `medium`, `high`, `xhigh`, `grace` (all seconds, must be > 0) |
-| `[async]` | `poll_interval` (Go duration string, e.g. `"60s"`) |
-| `[models]` | `<engine> = [...]` model allowlists per engine |
-| `[hooks]` | `deny`, `warn` (string arrays), `event_deny_action` (`"kill"`) |
-| `[skills]` | `search_paths` (string array, tilde expansion supported) |
-| `[roles.<name>]` | Role definitions (see below) |
+| `[timeout]` | `low`, `medium`, `high`, `xhigh`, `grace` |
+| `[async]` | `poll_interval` |
+| `[models]` | per-engine model lists |
+| `[hooks]` | `pre_dispatch`, `on_event`, `event_deny_action` |
+| `[skills]` | `search_paths` |
+| `[roles.<name>]` | flat role definitions |
 
 ### Merge behavior
 
 | What | Rule |
 |------|------|
-| Scalar fields (`engine`, `model`, `effort`, etc.) | Last explicit definition wins |
+| Scalar fields | Last explicit definition wins |
 | `[models].<engine>` | Deduplicated union |
 | `skills.search_paths` | Deduplicated union |
-| `hooks.deny`, `hooks.warn` | Deduplicated union |
-| `[roles.<name>]` | Additive — new roles added, existing roles deep-merged |
-| `[roles.<name>.variants.<v>]` | Additive — new variants added, collisions deep-merged |
+| `hooks.pre_dispatch`, `hooks.on_event` | Deduplicated union |
+| `[roles.<name>]` | Additive map; existing roles are field-merged |
+
+Roles are flat. There is no variant resolution or inheritance layer.
 
 ---
 
 ## Roles
 
-A role bundles engine, model, effort, timeout, skills, and system prompt.
+A role bundles engine, model, effort, timeout, skills, and an optional system
+prompt file.
 
 ```toml
-[roles.researcher]
-engine = "claude"
-model = "claude-opus-4-6"
-effort = "high"
-timeout = 900
-skills = ["web-search", "pratchett-read"]
-system_prompt_file = "prompts/researcher.md"
+[roles.auditor]
+engine = "codex"
+model = "gpt-5.4"
+effort = "xhigh"
+timeout = 1800
+skills = ["agent-mux", "review"]
+system_prompt_file = "prompts/auditor.md"
 ```
 
 ### Role fields
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `engine` | string | Override default engine |
-| `model` | string | Override default model |
-| `effort` | string | Override default effort |
-| `timeout` | int | Override timeout in seconds (must be > 0) |
-| `skills` | string[] | Skills to inject (merged with CLI `--skill`) |
-| `system_prompt_file` | string | Path relative to config source directory |
+| `engine` | string | Engine override |
+| `model` | string | Model override |
+| `effort` | string | Effort override |
+| `timeout` | int | Timeout in seconds |
+| `skills` | string[] | Skills to inject |
+| `system_prompt_file` | string | Relative to the config source directory |
 
-`system_prompt_file` resolves to `<configDir>/<path>` or
-`<configDir>/prompts/<filename>` (fallback when path has no directory component).
+`system_prompt_file` resolution:
 
----
+1. `<configDir>/<path>`
+2. `<configDir>/prompts/<filename>` when the configured value has no directory
 
-## Variants
-
-Variants inherit all parent role fields, override only what they set.
-
-```toml
-[roles.lifter]
-engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-timeout = 1800
-
-[roles.lifter.variants.claude]
-engine = "claude"
-model = "claude-sonnet-4-6"
-# effort and timeout inherited
-
-[roles.lifter.variants.spark]
-model = "gpt-5.3-codex-spark"
-effort = "medium"
-timeout = 600
-```
-
-Variant fields: same as role (`engine`, `model`, `effort`, `timeout`,
-`skills`, `system_prompt_file`). Unset fields inherit from parent.
-
-Use variants when task semantics are the same but you want a different
-engine/model. Use separate roles when system prompt, skills, or effort
-differ fundamentally.
+Use a new role name when you want a different engine or model. Example:
+`lifter` and `lifter-claude` are separate role definitions, not a role plus a
+variant.
 
 ---
 
-## Profile/Coordinator System
+## Profiles
 
-`--profile=name` loads an orchestrator persona from agents/ directories.
-
-### Search order
+`--profile=<name>` loads a coordinator persona from one of these locations:
 
 1. `<cwd>/.claude/agents/<name>.md`
 2. `<cwd>/agents/<name>.md`
 3. `<cwd>/.agent-mux/agents/<name>.md`
 4. `~/.agent-mux/agents/<name>.md`
 
-### Format
+There is no companion TOML overlay beside the profile file.
+
+### Profile format
 
 ```markdown
 ---
@@ -171,21 +155,24 @@ engine: claude
 model: claude-opus-4-6
 effort: high
 timeout: 900
-skills: [web-search]
+skills: [review]
 ---
-You are a senior code reviewer. Focus on correctness and edge cases.
+You are a code reviewer. Prioritize regressions and edge cases.
 ```
 
-If `<name>.toml` exists beside `<name>.md`, it loads as a config overlay.
+The profile body becomes the system prompt only when the dispatch did not
+already supply an explicit system prompt.
 
-### Prompt composition order
+### System prompt composition
 
-1. Profile body (from `--profile`)
-2. Role system prompt file (from `system_prompt_file` in role config)
-3. CLI system prompt text (from `--system-prompt` / `--system-prompt-file`)
+Current behavior is:
 
-`coordinator` in JSON is an alias for `profile`. If both are set to
-different values, agent-mux returns an error.
+1. explicit `system_prompt` / CLI system prompt, if present
+2. otherwise the profile body, if present
+3. then prepend the role `system_prompt_file`, if present
+
+`coordinator` in stdin JSON is an alias for `profile`. Different values cause
+an error.
 
 ---
 
@@ -194,45 +181,102 @@ different values, agent-mux returns an error.
 ### Resolution order
 
 1. `<cwd>/.claude/skills/<name>/SKILL.md`
-2. `<configDir>/.claude/skills/<name>/SKILL.md` (if configDir differs from cwd)
-3. Each path in `[skills] search_paths`: `<path>/<name>/SKILL.md`
+2. `<configDir>/.claude/skills/<name>/SKILL.md` if `configDir != cwd`
+3. each `[skills].search_paths` entry: `<path>/<name>/SKILL.md`
 
-First match wins. Tilde expansion (`~`) supported in search_paths.
+First match wins.
 
 ### Behavior
 
-- Content wrapped in `<skill name="...">` XML blocks, prepended to prompt
-- If `<skillDir>/scripts/` exists, added to `--add-dir` for all engines
-- Role skills merge with CLI/JSON skills (CLI skills first, then role skills)
-- Duplicate names deduplicated
-- `--skip-skills` bypasses injection while keeping role's engine/model/effort
+- skill content is wrapped in `<skill name="...">` blocks and prepended to the prompt
+- if `<skillRoot>/<name>/scripts/` exists, that directory is added to `engine_opts["add-dir"]`
+- duplicate skill names are removed
+- `--skip-skills` disables skill injection but does not disable role/profile resolution
 
-### Discovering skills
+Discover skills with:
 
 ```bash
-agent-mux config skills        # tabular: NAME, PATH, SOURCE
-agent-mux config skills --json # JSON array
+agent-mux config skills
+agent-mux config skills --json
 ```
 
 ---
 
 ## Hooks
 
-Pattern-based deny/warn rules on prompts and events.
+Hooks are executable scripts configured in `[hooks]`. They are not pattern
+lists.
 
 ```toml
 [hooks]
-deny = ["DROP TABLE", "vault.sh export"]
-warn = ["rm -rf", "git push --force"]
-event_deny_action = "kill"
+pre_dispatch = ["~/.agent-mux/hooks/pre-dispatch.sh"]
+on_event = ["~/.agent-mux/hooks/on-event.sh"]
+event_deny_action = "warn"
 ```
 
-- **deny**: Blocks dispatch before launch if prompt or system prompt matches
-- **warn**: Logged but not blocking
-- **event_deny_action**: `"kill"` — kills harness if a denied pattern appears in events
+### pre_dispatch
 
-Hooks also inject a policy instruction into the prompt when rules are configured.
+Each script receives JSON on stdin:
 
-**Limitation:** Event-level matching can false-positive during harness
-orientation (e.g., Codex reading files containing denied patterns). Prompt-level
-deny is reliable; event-level deny is experimental.
+```json
+{
+  "phase": "pre_dispatch",
+  "prompt": "...",
+  "system_prompt": "..."
+}
+```
+
+Environment variables:
+
+- `HOOK_PHASE=pre_dispatch`
+- `HOOK_PROMPT`
+- `HOOK_SYSTEM_PROMPT`
+
+### on_event
+
+Each script receives JSON on stdin:
+
+```json
+{
+  "phase": "event",
+  "text": "...",
+  "command": "...",
+  "tool": "...",
+  "file_path": "/absolute/path"
+}
+```
+
+Environment variables:
+
+- `HOOK_PHASE=event`
+- `HOOK_COMMAND`
+- `HOOK_FILE_PATH`
+- `HOOK_TOOL`
+- `HOOK_TEXT`
+
+### Exit codes and deny action
+
+| Exit code | Meaning |
+|-----------|---------|
+| `0` | allow |
+| `1` | block |
+| `2` | warn |
+
+The script's stderr becomes the reason string.
+
+`event_deny_action` controls what happens when an `on_event` hook returns
+`1`:
+
+- `kill`: treat the event as denied and fail the dispatch
+- `warn`: downgrade the deny to a warning
+
+`pre_dispatch` exit `1` blocks launch. `pre_dispatch` exit `2` does not block.
+
+### Path handling
+
+- script paths are executed exactly as configured
+- `~/` is expanded to the user's home directory
+- relative paths are not rebased to the config file directory
+
+Hooks do not inject extra policy text into the prompt. `PromptInjection()`
+returns an empty string in the current implementation.
