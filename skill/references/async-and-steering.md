@@ -8,40 +8,45 @@ Fire-and-forget dispatch, result collection, and live control over running worke
 
 ### --async flag
 
-When `--async` is present, agent-mux starts the dispatch in a background
-goroutine and returns immediately with an ack:
+When `--async` is present, agent-mux starts the dispatch in the current process,
+emits an ack to stdout, then detaches stdout/stderr and runs synchronously.
+The calling wrapper (e.g., `run_in_background`) provides backgrounding.
 
 ```json
 {
   "schema_version": 1,
   "kind": "async_started",
   "dispatch_id": "01JQXYZ...",
-  "salt": "coral-fox-nine",
-  "artifact_dir": "/tmp/agent-mux/01JQXYZ..."
+  "artifact_dir": "/tmp/agent-mux-501/01JQXYZ..."
 }
 ```
 
-The calling process exits after printing the ack. The worker continues in the
-same OS process. The `dispatch_id` is the handle for all subsequent operations.
+Before the ack: `host.pid` and initial `status.json` are written and fsynced.
+Consumers can safely read both immediately after receiving the ack.
+
+The `dispatch_id` is the handle for all subsequent operations.
 
 ### Collecting results
 
 **wait** — block until terminal state:
 ```bash
-agent-mux wait 01JQXYZ              # default poll 60s
-agent-mux wait 01JQXYZ --poll 5s    # faster polling
+agent-mux wait 01JQXYZ 2>/dev/null             # default poll 60s
+agent-mux wait --poll 30s 01JQXYZ 2>/dev/null   # faster polling
+agent-mux wait --json 01JQXYZ 2>/dev/null       # JSON result when done
 ```
 
-Prints the final `DispatchResult` JSON to stdout on completion.
+Emits status lines to stderr during polling. Prints final result to stdout.
 
 **result** — retrieve the response:
 ```bash
-agent-mux result 01JQXYZ            # blocks until done
-agent-mux result 01JQXYZ --no-wait  # error if still running
-agent-mux result --artifacts 01JQXYZ  # list artifact files
+agent-mux result 01JQXYZ 2>/dev/null            # blocks until done
+agent-mux result --no-wait 01JQXYZ 2>/dev/null  # error if still running
+agent-mux result --json 01JQXYZ 2>/dev/null     # structured JSON result
+agent-mux result --artifacts 01JQXYZ 2>/dev/null # list artifact files
 ```
 
-Falls back to `full_output.md` for truncated or legacy dispatches.
+Result reads from `~/.agent-mux/dispatches/<id>/result.json`. Falls back to
+`full_output.md` in the artifact directory for legacy dispatches.
 
 ### Poll interval precedence
 
@@ -51,45 +56,52 @@ CLI --poll flag > config.toml [async].poll_interval > 60s hardcoded default
 
 ### status.json
 
-The artifact directory contains `status.json`, updated on each event boundary:
+The artifact directory contains `status.json`, updated atomically on each event:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `state` | string | `running`, `completed`, `failed` |
+| `state` | string | `running`, `initializing`, `completed`, `failed`, `timed_out`, `orphaned` |
 | `elapsed_s` | int | Seconds since dispatch start |
 | `last_activity` | string | Most recent activity description |
-| `tool_count` | int | Tool calls observed |
-| `files_changed_count` | int | File writes observed |
+| `tools_used` | int | Tool calls observed |
+| `files_changed` | int | File writes observed |
+| `stdin_pipe_ready` | bool | Whether Codex stdin FIFO is open |
+| `ts` | string | ISO 8601 timestamp |
+| `dispatch_id` | string | Dispatch ID |
+| `session_id` | string | Harness session ID |
+
+`orphaned` state: detected when `host.pid` exists but the process is dead.
 
 ---
 
 ## Steering Commands
 
 `agent-mux steer <dispatch_id> <action> [args]` provides structured control
-over running dispatches.
-
-### Live status
-
-Read live status from `status.json`. Detects orphaned processes.
-
-```bash
-agent-mux status --json 01JQXYZ
-```
+over running dispatches. Dispatch ID can be a unique prefix.
 
 ### steer abort
 
-Kill the worker process. Sends SIGTERM to host PID (async) or writes
-`control.json` with `abort: true` (foreground).
+Kill the worker process. Sends SIGTERM to host PID (async dispatches) or writes
+`control.json` with `abort: true` (foreground dispatches).
 
 ```bash
 agent-mux steer 01JQXYZ abort
 ```
 
+Response:
+```json
+{"action":"abort","dispatch_id":"01JQXYZ...","mechanism":"sigterm","pid":12345,"delivered":true}
+```
+
+Mechanism is `sigterm` (PID alive) or `control_file` (PID dead or no host.pid).
+
 ### steer nudge
 
-Send a wrap-up message. Live Codex workers on Unix may receive this through the
-dispatch-local `stdin.pipe` FIFO; other cases fall back to inbox delivery.
-Default: "Please wrap up your current work and provide a final summary."
+Send a wrap-up message. Codex workers on Unix may receive this through the
+dispatch-local stdin FIFO (`stdin_fifo` mechanism); other cases fall back to
+inbox delivery.
+
+Default message: "Please wrap up your current work and provide a final summary."
 
 ```bash
 agent-mux steer 01JQXYZ nudge
@@ -104,8 +116,9 @@ Redirect the worker with new instructions. Argument is required.
 agent-mux steer 01JQXYZ redirect "Focus on the tests, skip the refactor"
 ```
 
-The steer ack JSON includes a `mechanism` field. For Codex soft steering this
-is `stdin_fifo`; inbox fallback reports `inbox`.
+Codex redirect via stdin FIFO prepends: "IMPORTANT: The coordinator has
+redirected your task. Stop your current approach and follow these new
+instructions instead:"
 
 ### steer extend
 
@@ -116,7 +129,18 @@ Extend the watchdog kill threshold. Writes `control.json` with
 agent-mux steer 01JQXYZ extend 300
 ```
 
-### Output format
+Argument: positive integer (seconds).
+
+### Steer delivery mechanisms
+
+| Mechanism | When used |
+|-----------|-----------|
+| `stdin_fifo` | Codex, running state, stdin pipe ready, PID alive |
+| `inbox` | Fallback for all engines; nudge and redirect |
+| `sigterm` | Abort when host PID is alive |
+| `control_file` | Abort and extend (always via control.json) |
+
+### Steer output format
 
 All steer commands return JSON:
 
@@ -124,15 +148,16 @@ All steer commands return JSON:
 {
   "action": "redirect",
   "dispatch_id": "01JQXYZ...",
+  "mechanism": "inbox",
   "delivered": true
 }
 ```
 
-Errors follow standard envelope: `{"kind":"error","error":{...}}`.
+Errors: `{"kind":"error","error":{"code":"...","message":"...","hint":"...","example":"","retryable":false}}`.
 
 ---
 
-## Signal System (Legacy)
+## Signal System
 
 `--signal` delivers a message to a running dispatch's inbox:
 
@@ -142,51 +167,34 @@ agent-mux --signal 01JQXYZ "Focus on auth paths; skip tests"
 
 ### How it works
 
-1. Message appended to `inbox.md` (atomic with flock)
-2. JSON ack returned confirming write
-3. LoopEngine checks inbox at event boundaries
-4. If harness has a resumable session ID: graceful stop, then resume with
+1. Resolves dispatch reference to artifact directory
+2. Message appended to `inbox.md` (atomic with flock)
+3. JSON ack returned confirming write
+4. LoopEngine checks inbox at event boundaries
+5. If harness has a resumable session ID: graceful stop, then resume with
    message injected into the conversation
 
 ### Important caveats
 
 - **Ack != delivery.** Ack confirms inbox write, not worker consumption.
 - **Not instant.** Waits for an event boundary and a resumable session ID.
-- **Keep signals short.** They become a resumed turn. Crisp commands, not
-  multi-paragraph redesigns.
+- **Keep signals short.** They become a resumed turn.
 
 ---
 
-## Streaming Protocol v2
+## Streaming Protocol
 
 ### Default: silent mode
 
 Only bookend events (`dispatch_start`, `dispatch_end`) and failure events
-are emitted to stderr. All events still written to `events.jsonl`.
+are emitted to stderr. All events always written to `events.jsonl`.
 
 ### --stream / -S
 
 Restores full event streaming to stderr: heartbeats, tool activity, progress.
 Useful for human debugging and real-time monitoring.
 
-### Event types
+### --verbose / -v
 
-All events carry: `schema_version`, `type`, `dispatch_id`, `salt`,
-`trace_token`, `ts`.
-
-| Type | Key fields |
-|------|------------|
-| `dispatch_start` | `engine`, `model`, `effort`, `timeout_sec` |
-| `dispatch_end` | `status`, `duration_ms` |
-| `heartbeat` | `elapsed_s`, `interval_s`, `last_activity` |
-| `tool_start` / `tool_end` | `tool`, `args` / `duration_ms` |
-| `file_write` / `file_read` | `path` |
-| `command_run` | `command` |
-| `progress` | `message` |
-| `timeout_warning` | `message` |
-| `frozen_warning` | `silence_seconds`, `message` |
-| `coordinator_inject` | `message` |
-| `error` | `error_code`, `message` |
-
-Heartbeats emit every 15s (configurable). `--verbose` adds raw harness lines
-but breaks pure NDJSON parsing.
+Adds raw harness lines to stderr output. Breaks pure NDJSON parsing but
+useful for debugging harness behavior.

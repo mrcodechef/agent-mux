@@ -1,47 +1,54 @@
 # Recovery Guide
 
-Recovery workflow, signal mechanics, artifact layout, and liveness watchdog.
+Recovery workflow, artifact layout, signal mechanics, and liveness watchdog.
 
 ---
 
 ## Artifact Directory Layout
 
-Every dispatch gets an artifact directory at `/tmp/agent-mux-<uid>/<dispatch_id>/`.
-Override with `--artifact-dir`. Uses `$XDG_RUNTIME_DIR/agent-mux/` if set.
+Every dispatch gets an artifact directory. Default location:
+`$XDG_RUNTIME_DIR/agent-mux/<dispatch_id>/` or `/tmp/agent-mux-<uid>/<dispatch_id>/`.
+Override with `--artifact-dir`.
 
 | File | Purpose |
 |------|---------|
-| `_dispatch_meta.json` | Dispatch metadata (ID, salt, engine, model, status, timestamps) |
-| `events.jsonl` | NDJSON event log (mirrored from stderr) |
+| `meta.json` | Runtime dispatch metadata (ID, session_id, engine, model, status, timestamps, prompt_hash) |
+| `events.jsonl` | NDJSON event log (all events) |
+| `status.json` | Live status for async polling (state, elapsed, tools, files) |
+| `host.pid` | PID of async dispatch process |
+| `control.json` | Steering control (abort, extend_kill_seconds) |
 | `inbox.md` | Coordinator mailbox for signal/steer injection |
 | `full_output.md` | Full response when truncation occurred |
-| `status.json` | Live status for async polling |
 | (worker files) | Any files the worker created as artifacts |
 
-### Pipeline artifacts
+### Persistent store
 
-```
-/tmp/agent-mux-<uid>/<dispatch_id>/pipeline/
-  step-0/worker-0/
-    _dispatch_meta.json, events.jsonl, output.md
-  step-1/worker-0/
-    ...
-```
+Durable records live at `~/.agent-mux/dispatches/<dispatch_id>/`:
+
+| File | Purpose |
+|------|---------|
+| `meta.json` | Dispatch metadata (ID, session_id, engine, model, role, variant, profile, cwd, timeout, started_at) |
+| `result.json` | Full dispatch result (embeds DispatchResult + envelope: started_at, ended_at, artifact_dir, cwd, engine, model, role, variant, profile, effort, session_id, response_chars, timeout_sec) |
+
+The persistent store is the source of truth for `list`, `status`, `result`,
+and `inspect`. Artifact directories are ephemeral runtime state.
 
 ---
 
 ## Recovery Workflow
 
 Recovery continues a timed-out or interrupted dispatch via `--recover <id>`
-or `continues_dispatch_id` in JSON.
+or `"recover": "<id>"` in JSON.
 
 ### Flow
 
-1. **Resolve** — reads control record to find artifact directory
-2. **Reconstruct** — reads `_dispatch_meta.json` and scans artifacts
+1. **Resolve** — finds artifact directory via persistent meta at
+   `~/.agent-mux/dispatches/<id>/meta.json`, then checks current and legacy
+   artifact roots
+2. **Reconstruct** — reads `meta.json` from artifact dir, scans artifact files
 3. **Build prompt** — generates continuation with: dispatch ID, engine, model,
    previous status, artifact file paths, original prompt hash
-4. **Re-dispatch** — recovery prompt replaces `spec.Prompt`, runs normal path
+4. **Re-dispatch** — recovery prompt replaces `spec.Prompt`, runs normal dispatch path
 
 ### When to use
 
@@ -57,24 +64,15 @@ Your recovery prompt should be the delta, not a full re-brief.
 
 ---
 
-## Control Records
+## Dispatch ID Resolution
 
-Map dispatch IDs to artifact directories.
-Location: `/tmp/agent-mux-<uid>/control/<dispatch_id>.json`
+All lifecycle commands (`status`, `result`, `inspect`, `wait`, `steer`)
+accept a full dispatch ID or a unique prefix.
 
-```json
-{
-  "dispatch_id": "01KM...",
-  "artifact_dir": "/tmp/agent-mux-501/01KM...",
-  "dispatch_salt": "mint-ant-five",
-  "trace_token": "AGENT_MUX_GO_01KM..."
-}
-```
-
-Resolution order for `--recover` and `--signal`:
-1. Control record at `/tmp/agent-mux-<uid>/control/<id>.json`
-2. Legacy default directory at `/tmp/agent-mux-<uid>/<id>/`
-3. Error if neither found
+Resolution order:
+1. Search `~/.agent-mux/dispatches/` for matching directory
+2. If prefix matches multiple dispatches, return error
+3. Resolve artifact directory from persistent meta
 
 ---
 
@@ -84,8 +82,7 @@ File-based message queue at `<artifact_dir>/inbox.md`.
 
 - **Write:** append with `\n---\n` delimiter, flock(LOCK_EX) for atomicity
 - **Read:** exclusive lock, read all, split by delimiter, truncate to zero
-- **Check:** `HasMessages()` is stat-only (file size > 0), no lock — for fast
-  non-blocking polling at event boundaries
+- **Check:** stat-only (file size > 0), no lock — for fast non-blocking polling
 
 LoopEngine checks inbox in three places:
 1. After every harness stdout line
@@ -103,16 +100,14 @@ Dual path ensures steering arrives even when harness is idle.
 | Threshold | Default | Action |
 |-----------|---------|--------|
 | `silence_warn_seconds` | 90s | Emit `frozen_warning`, send stdin nudge |
-| `silence_kill_seconds` | 180s | Kill harness, return `frozen_tool_call` error |
-| `long_command_silence_seconds` | 540s | Extended threshold for cargo, make, nvcc, etc. |
+| `silence_kill_seconds` | 180s | Kill harness, return `frozen_killed` error |
 
-The watchdog tracks active commands via `tool_start`/`command_run` (set) and
-`tool_end` (clear). Known long-running commands get the extended threshold.
+Configurable in `[liveness]` section. Per-dispatch override via `engine_opts`.
 
 ### Stdin nudge
 
 At warn threshold, writes `"\n"` to Codex's stdin pipe to attempt recovery.
-Claude and Gemini don't support stdin nudge.
+Claude and Gemini do not support stdin nudge (return nil).
 
 ### Timeout flow
 
@@ -124,6 +119,11 @@ Claude and Gemini don't support stdin nudge.
 Design principle: kill the process, preserve the artifacts. Written files
 persist regardless of timeout.
 
+### Long command detection
+
+The watchdog tracks active commands. Known long-running commands (cargo, make,
+nvcc, etc.) trigger `long_command_detected` event and extended silence threshold.
+
 ---
 
 ## Supervisor
@@ -131,3 +131,23 @@ persist regardless of timeout.
 Process groups (`Setpgid: true`) ensure grandchildren die with parent.
 `GracefulStop`: SIGTERM first, then SIGKILL after grace period. Process group
 kill (`Kill(-pgid, ...)`) terminates all descendants atomically.
+
+---
+
+## Failure Decision Tree
+
+```
+status?
+ timed_out + files_changed non-empty
+   -> --recover=<dispatch_id> with continuation prompt
+ timed_out + files_changed empty
+   -> Prompt too broad. Reframe with tighter scope. Retry ONCE.
+ timed_out + heartbeat_count == 0
+   -> Worker never started. Config error. Check and retry once.
+ failed + error.retryable
+   -> Fix cause (wrong flag, missing arg). Retry ONCE.
+ failed + not retryable
+   -> Structural. Escalate.
+ Second failure on same step
+   -> STOP. Problem is the prompt or the scope, not the effort level.
+```
