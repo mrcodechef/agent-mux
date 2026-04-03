@@ -183,10 +183,6 @@ func DiscoverSkills(cwd string, configDir string, searchPaths []string) []SkillS
 	return results
 }
 
-func availableSkills(skillsRoot string) []string {
-	return availableSkillsFromRoots([]searchRoot{{dir: skillsRoot}})
-}
-
 // availableSkillsFromRoots returns a deduplicated, sorted list of skill names
 // found across all search roots.
 func availableSkillsFromRoots(roots []searchRoot) []string {

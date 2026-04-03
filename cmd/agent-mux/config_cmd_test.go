@@ -38,19 +38,6 @@ model = "opus-4"
 effort = "high"
 timeout = 1800
 
-[pipelines.research]
-max_parallel = 4
-
-[[pipelines.research.steps]]
-name = "gather"
-role = "scout"
-parallel = 3
-pass_output_as = "gathered"
-
-[[pipelines.research.steps]]
-name = "synthesize"
-role = "lifter"
-receives = "gathered"
 `
 
 func writeTestConfig(t *testing.T) string {
@@ -190,54 +177,6 @@ func TestConfigRoles_JSON(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing variant entry for 'claude'")
-	}
-}
-
-func TestConfigPipelines_Table(t *testing.T) {
-	isolateHome(t)
-	cfgPath := writeTestConfig(t)
-
-	var stdout bytes.Buffer
-	exit := runConfigCommand([]string{"pipelines", "--config", cfgPath}, &stdout)
-	if exit != 0 {
-		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
-	}
-
-	out := stdout.String()
-	if !strings.Contains(out, "NAME") {
-		t.Fatalf("missing table header:\n%s", out)
-	}
-	if !strings.Contains(out, "research") {
-		t.Fatalf("missing pipeline 'research':\n%s", out)
-	}
-	if !strings.Contains(out, "2") {
-		t.Fatalf("expected 2 steps for research pipeline:\n%s", out)
-	}
-}
-
-func TestConfigPipelines_JSON(t *testing.T) {
-	isolateHome(t)
-	cfgPath := writeTestConfig(t)
-
-	var stdout bytes.Buffer
-	exit := runConfigCommand([]string{"pipelines", "--json", "--config", cfgPath}, &stdout)
-	if exit != 0 {
-		t.Fatalf("exit code = %d, want 0; output = %q", exit, stdout.String())
-	}
-
-	var entries []map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &entries); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 pipeline, got %d", len(entries))
-	}
-	if entries[0]["name"] != "research" {
-		t.Fatalf("pipeline name = %v, want research", entries[0]["name"])
-	}
-	// Steps comes as float64 from JSON.
-	if int(entries[0]["steps"].(float64)) != 2 {
-		t.Fatalf("pipeline steps = %v, want 2", entries[0]["steps"])
 	}
 }
 

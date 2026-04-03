@@ -345,10 +345,8 @@ func (a *CodexAdapter) ResumeArgs(spec *types.DispatchSpec, sessionID string, me
 
 func addDirs(spec *types.DispatchSpec) []string {
 	out := make([]string, 0)
-	for _, key := range []string{"add_dirs", "add-dir"} {
-		if opts, ok := spec.EngineOpts[key]; ok {
-			out = append(out, anySliceToStrings(opts)...)
-		}
+	if opts, ok := spec.EngineOpts["add-dir"]; ok {
+		out = append(out, anySliceToStrings(opts)...)
 	}
 	return out
 }

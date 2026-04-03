@@ -13,7 +13,6 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -26,7 +25,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
-	"github.com/buildoak/agent-mux/internal/pipeline"
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
 	"github.com/buildoak/agent-mux/internal/types"
@@ -69,14 +67,13 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, role, variant, profile, coordinator, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, salt, config, promptFile, recover                                     string
-	signal                                                                                          string
-	permissionMode, sandbox, reasoning                                                              string
-	pipeline                                                                                        string
-	timeout, maxDepth, responseMaxChars, maxTurns                                                   int
-	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async            bool
-	skills, addDirs                                                                                 stringSlice
+	engine, role, variant, profile, cwd, model, effort, systemPrompt, systemPromptFile   string
+	contextFile, artifactDir, salt, config, promptFile, recover                          string
+	signal                                                                               string
+	permissionMode, sandbox, reasoning                                                   string
+	timeout, maxDepth, responseMaxChars, maxTurns                                        int
+	full, noFull, noSubdispatch, skipSkills, stdin, version, verbose, yes, stream, async bool
+	skills, addDirs                                                                      stringSlice
 }
 
 type previewResult struct {
@@ -100,7 +97,6 @@ type previewDispatchSpec struct {
 	Role                string   `json:"role,omitempty"`
 	Variant             string   `json:"variant,omitempty"`
 	Profile             string   `json:"profile,omitempty"`
-	Pipeline            string   `json:"pipeline,omitempty"`
 	Cwd                 string   `json:"cwd"`
 	Skills              []string `json:"skills,omitempty"`
 	SkipSkills          bool     `json:"skip_skills,omitempty"`
@@ -478,21 +474,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	dispatch.EnsureTraceability(spec)
 
-	var pipelineCfg pipeline.PipelineConfig
-	if spec.Pipeline != "" {
-		var ok bool
-		pipelineCfg, ok = cfg.Pipelines[spec.Pipeline]
-		if !ok {
-			return failResult(spec, "config_error",
-				fmt.Sprintf("Pipeline %q not found in config.", spec.Pipeline),
-				fmt.Sprintf("Available pipelines: %v", availablePipelines(cfg)))
-		}
-		if err := pipeline.ValidatePipeline(pipelineCfg); err != nil {
-			return failResult(spec, "config_error",
-				fmt.Sprintf("Pipeline %q validation failed: %v", spec.Pipeline, err), "")
-		}
-	}
-
 	preview := buildPreviewResult(spec, shouldRequireConfirmation(flags.yes, stdin, stdout, stderr, isTerminal))
 	if command == commandPreview {
 		emitResult(stdout, preview)
@@ -514,18 +495,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
-
-	if spec.Pipeline != "" {
-		if flags.async {
-			return failResult(spec, "invalid_args", "--async is not supported with pipelines", "Run pipeline dispatches synchronously.")
-		}
-		result, err := runPipeline(ctx, pipelineCfg, spec, cfg, stderr, flags.verbose, flags.stream)
-		if err != nil {
-			return failResult(spec, "config_error", err.Error(), "")
-		}
-		emitResult(stdout, result)
-		return 0
-	}
 
 	if flags.async {
 		return runAsyncDispatch(ctx, spec, cfg, stderr, stdout, flags.verbose, flags.stream, hookEval)
@@ -703,10 +672,6 @@ func emitResult(w io.Writer, result interface{}) {
 		if value == nil {
 			payload = buildFailedResult(&types.DispatchSpec{}, "internal_error", "missing dispatch result", "")
 		}
-	case *pipeline.PipelineResult:
-		if value == nil {
-			payload = buildFailedResult(&types.DispatchSpec{}, "internal_error", "missing pipeline result", "")
-		}
 	case *SignalAck:
 		if value == nil {
 			payload = buildSignalErrorAck("", "internal_error", "missing signal acknowledgement", "")
@@ -766,7 +731,6 @@ func normalizeDispatchFlags(flags *cliFlags) {
 	}
 
 	flags.profile = strings.TrimSpace(flags.profile)
-	flags.coordinator = strings.TrimSpace(flags.coordinator)
 	for i, name := range flags.skills {
 		flags.skills[i] = strings.TrimSpace(name)
 	}
@@ -788,7 +752,6 @@ func validateDispatchFlags(flags cliFlags, flagsSet map[string]bool) error {
 		value string
 	}{
 		{label: "profile", value: flags.profile},
-		{label: "coordinator", value: flags.coordinator},
 	} {
 		if field.value == "" {
 			continue
@@ -944,9 +907,6 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 	if !jsonFieldSet(fields, "full_access") {
 		spec.FullAccess = true
 	}
-	if !jsonFieldSet(fields, "pipeline_step") {
-		spec.PipelineStep = -1
-	}
 	if jsonFieldSet(fields, "timeout_sec") {
 		if err := validatePositiveDispatchValue("timeout_sec", spec.TimeoutSec); err != nil {
 			return err
@@ -962,10 +922,6 @@ func materializeStdinDispatchSpec(spec *types.DispatchSpec, fields map[string]js
 	if !jsonFieldSet(fields, "response_max_chars") {
 		spec.ResponseMaxChars = unsetResponseMaxChars
 	}
-	if !jsonFieldSet(fields, "handoff_mode") && spec.HandoffMode == "" {
-		spec.HandoffMode = "summary_and_refs"
-	}
-
 	return nil
 }
 
@@ -975,7 +931,6 @@ func validateStdinProfileAliases(fields map[string]json.RawMessage) error {
 		key   string
 	}{
 		{label: "profile", key: "profile"},
-		{label: "coordinator", key: "coordinator"},
 	} {
 		raw, ok := fields[field.key]
 		if !ok {
@@ -1066,7 +1021,6 @@ func previewDispatchSpecFrom(spec *types.DispatchSpec) previewDispatchSpec {
 		Role:                spec.Role,
 		Variant:             spec.Variant,
 		Profile:             spec.Profile,
-		Pipeline:            spec.Pipeline,
 		Cwd:                 spec.Cwd,
 		Skills:              append([]string(nil), spec.Skills...),
 		SkipSkills:          spec.SkipSkills,
@@ -1181,7 +1135,6 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	bindStr(fs, &flags.role, "Role", "", "role", "R")
 	fs.StringVar(&flags.variant, "variant", "", "Role variant")
 	fs.StringVar(&flags.profile, "profile", "", "Profile")
-	fs.StringVar(&flags.coordinator, "coordinator", "", "Legacy alias for --profile")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model", "", "model", "m")
 	bindStr(fs, &flags.effort, "Effort", flags.effort, "effort", "e")
@@ -1196,7 +1149,6 @@ func newFlagSet(stderr io.Writer) (*flag.FlagSet, *cliFlags) {
 	fs.StringVar(&flags.signal, "signal", "", "Dispatch ID to send signal to")
 	fs.StringVar(&flags.salt, "salt", "", "Dispatch salt")
 	fs.StringVar(&flags.config, "config", "", "Config path")
-	bindStr(fs, &flags.pipeline, "Pipeline name", "", "pipeline", "P")
 	bindBool(fs, &flags.full, "Full access mode", flags.full, "full", "f")
 	fs.BoolVar(&flags.noFull, "no-full", false, "Disable full access mode")
 	fs.StringVar(&flags.promptFile, "prompt-file", "", "Prompt file")
@@ -1257,10 +1209,6 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		}
 	}
 	dispatchID := ulid.Make().String()
-	profile, err := resolveProfileName(flags.profile, flags.coordinator)
-	if err != nil {
-		return nil, err
-	}
 	cwd := flags.cwd
 	if cwd == "" {
 		cwd, err = os.Getwd()
@@ -1307,8 +1255,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		Cwd:              cwd,
 		Skills:           append([]string(nil), flags.skills...),
 		SkipSkills:       flags.skipSkills,
-		Profile:          profile,
-		Pipeline:         flags.pipeline,
+		Profile:          flags.profile,
 		ContextFile:      flags.contextFile,
 		ArtifactDir:      artifactDir,
 		TimeoutSec:       flags.timeout,
@@ -1317,27 +1264,12 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*types.DispatchSpec, err
 		Variant:          flags.variant,
 		MaxDepth:         flags.maxDepth,
 		AllowSubdispatch: allowSubdispatch,
-		PipelineStep:     -1,
-		HandoffMode:      "summary_and_refs",
 		ResponseMaxChars: flags.responseMaxChars,
 		EngineOpts:       engineOpts,
 		FullAccess:       fullAccess,
 	}
 
 	return spec, nil
-}
-
-func resolveProfileName(profile, coordinator string) (string, error) {
-	profile = strings.TrimSpace(profile)
-	coordinator = strings.TrimSpace(coordinator)
-	switch {
-	case profile == "":
-		return coordinator, nil
-	case coordinator == "" || coordinator == profile:
-		return profile, nil
-	default:
-		return "", fmt.Errorf("conflicting profile values: --profile=%q --coordinator=%q", profile, coordinator)
-	}
 }
 
 func normalizeArgs(args []string) []string {
@@ -1378,7 +1310,6 @@ func flagTakesValue(name string) bool {
 		"--role", "-R",
 		"--variant",
 		"--profile",
-		"--coordinator",
 		"--cwd", "-C",
 		"--model", "-m",
 		"--effort", "-e",
@@ -1392,7 +1323,6 @@ func flagTakesValue(name string) bool {
 		"--signal",
 		"--salt",
 		"--config",
-		"--pipeline", "-P",
 		"--prompt-file",
 		"--max-depth",
 		"--permission-mode",
@@ -1420,83 +1350,6 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	for _, name := range names {
 		fs.BoolVar(dst, name, def, usage)
 	}
-}
-
-func runPipeline(ctx context.Context, pipelineCfg pipeline.PipelineConfig, baseSpec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, stream bool) (*pipeline.PipelineResult, error) {
-	hookEval := hooks.NewEvaluator(cfg.Hooks)
-	for i, step := range pipelineCfg.Steps {
-		if step.Role == "" {
-			if step.Variant != "" {
-				return nil, fmt.Errorf("resolve pipeline step[%d]: variant %q requires role", i, step.Variant)
-			}
-			continue
-		}
-		roleCfg, err := config.ResolveRole(cfg, step.Role)
-		if err != nil {
-			return nil, fmt.Errorf("resolve pipeline step[%d] role %q: %w", i, step.Role, err)
-		}
-		resolvedRole := *roleCfg
-		if step.Variant != "" {
-			resolvedRole, err = resolveVariant(resolvedRole, step.Variant)
-			if err != nil {
-				return nil, fmt.Errorf("resolve pipeline step[%d]: variant %q not found in role %q", i, step.Variant, step.Role)
-			}
-		}
-		if pipelineCfg.Steps[i].Engine == "" {
-			pipelineCfg.Steps[i].Engine = resolvedRole.Engine
-		}
-		if pipelineCfg.Steps[i].Model == "" {
-			pipelineCfg.Steps[i].Model = resolvedRole.Model
-		}
-		if pipelineCfg.Steps[i].Effort == "" {
-			pipelineCfg.Steps[i].Effort = resolvedRole.Effort
-		}
-		if pipelineCfg.Steps[i].Timeout == 0 && resolvedRole.Timeout > 0 {
-			pipelineCfg.Steps[i].Timeout = resolvedRole.Timeout
-		}
-		pipelineCfg.Steps[i].ResolvedSkills = mergeSkills(resolvedRole.Skills, baseSpec.Skills)
-		roleSystemPrompt, err := loadSystemPromptFile(resolvedRole.SourceDir, resolvedRole.SystemPromptFile)
-		if err != nil {
-			return nil, fmt.Errorf("resolve pipeline step[%d] system prompt: %w", i, err)
-		}
-		pipelineCfg.Steps[i].ResolvedSystemPrompt = prependSystemPrompt(roleSystemPrompt, baseSpec.SystemPrompt)
-	}
-
-	pipelineArtifactDir := filepath.Join(baseSpec.ArtifactDir, "pipeline")
-	if err := dispatch.EnsureArtifactDir(pipelineArtifactDir); err != nil {
-		return nil, fmt.Errorf("create pipeline artifact dir: %w", err)
-	}
-
-	dispatchFn := func(ctx context.Context, spec *types.DispatchSpec) *types.DispatchResult {
-		if denied, matched := checkPromptDenied(spec, hookEval); denied {
-			code, msg, suggestion := promptDeniedFailure(matched)
-			result := buildFailedResult(spec, code, msg, suggestion)
-			if result != nil && result.Metadata != nil {
-				result.Metadata.PipelineID = spec.PipelineID
-				result.Metadata.ParentDispatchID = spec.ParentDispatchID
-			}
-			return result
-		}
-
-		result, err := dispatchSpec(ctx, spec, cfg, stderr, verbose, stream, hookEval)
-		if err != nil {
-			return dispatch.BuildFailedResult(
-				spec,
-				"",
-				dispatch.NewDispatchError("startup_failed", err.Error(), ""),
-				&types.DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
-				&types.DispatchMetadata{Engine: spec.Engine, Model: spec.Model, Role: spec.Role, Tokens: &types.TokenUsage{}, PipelineID: spec.PipelineID, ParentDispatchID: spec.ParentDispatchID},
-				0,
-			)
-		}
-		if result != nil && result.Metadata != nil {
-			result.Metadata.PipelineID = spec.PipelineID
-			result.Metadata.ParentDispatchID = spec.ParentDispatchID
-		}
-		return result
-	}
-
-	return pipeline.ExecutePipeline(ctx, pipelineCfg, baseSpec, pipelineArtifactDir, dispatchFn)
 }
 
 func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, cfg *config.Config, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
@@ -1598,9 +1451,8 @@ func mergeStdinCLIFlags(spec *types.DispatchSpec, flags cliFlags, flagsSet map[s
 	if flagsSet["variant"] {
 		spec.Variant = flags.variant
 	}
-	if flagsSet["profile"] || flagsSet["coordinator"] {
-		p, _ := resolveProfileName(flags.profile, flags.coordinator)
-		spec.Profile = p
+	if flagsSet["profile"] {
+		spec.Profile = flags.profile
 	}
 	if flagsSet["cwd"] || flagsSet["C"] {
 		spec.Cwd = flags.cwd
@@ -1627,9 +1479,6 @@ func mergeStdinCLIFlags(spec *types.DispatchSpec, flags cliFlags, flagsSet map[s
 	}
 	if flagsSet["salt"] {
 		spec.Salt = flags.salt
-	}
-	if flagsSet["pipeline"] || flagsSet["P"] {
-		spec.Pipeline = flags.pipeline
 	}
 	if flagsSet["max-depth"] {
 		spec.MaxDepth = flags.maxDepth
@@ -1689,7 +1538,6 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 		"role", "R",
 		"variant",
 		"profile",
-		"coordinator",
 		"cwd", "C",
 		"model", "m",
 		"effort", "e",
@@ -1702,7 +1550,6 @@ func stdinDispatchFlagsSet(flagsSet map[string]bool) bool {
 		"recover",
 		"salt",
 		"config",
-		"pipeline", "P",
 		"full", "f",
 		"no-full",
 		"prompt-file",
@@ -1739,16 +1586,4 @@ func configuredModels(cfg *config.Config) map[string][]string {
 		models["gemini"] = []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview"}
 	}
 	return models
-}
-
-func availablePipelines(cfg *config.Config) []string {
-	if cfg == nil || len(cfg.Pipelines) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(cfg.Pipelines))
-	for name := range cfg.Pipelines {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
 }

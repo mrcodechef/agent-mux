@@ -32,10 +32,6 @@ func runSteerCommand(args []string, stdout, stderr io.Writer) int {
 	action := strings.TrimSpace(args[1])
 	rest := args[2:]
 
-	if action == "status" {
-		return steerStatusCompatibility(ref, rest, stdout, stderr)
-	}
-
 	resolved, err := resolveDispatchReference(ref)
 	if err != nil {
 		if validateErr := sanitize.ValidateDispatchID(ref); validateErr != nil {
@@ -154,18 +150,6 @@ func steerExtend(idPrefix, artifactDir string, rest []string, stdout io.Writer) 
 		"delivered":   true,
 	})
 	return 0
-}
-
-func steerStatusCompatibility(ref string, rest []string, stdout, stderr io.Writer) int {
-	if len(rest) != 0 {
-		return emitSteerError(stdout, 2, "invalid_args",
-			"status does not accept additional arguments",
-			"Use `agent-mux status --json <id>`.")
-	}
-	if stderr != nil {
-		_, _ = fmt.Fprintln(stderr, "warning: `agent-mux steer <id> status` is deprecated; use `agent-mux status --json <id>`")
-	}
-	return runStatusCommand([]string{"--json", ref}, stdout)
 }
 
 // --- control file types and I/O ---

@@ -228,9 +228,6 @@ func TestNewDispatchError(t *testing.T) {
 	if err.Example != "" {
 		t.Errorf("example = %q, want empty for override path", err.Example)
 	}
-	if err.Suggestion != "Did you mean 'gpt-5.4'?" {
-		t.Errorf("suggestion = %q", err.Suggestion)
-	}
 
 	err = NewDispatchError("frozen_killed", "", "")
 	if err.Message != "Worker killed after prolonged silence." {
@@ -239,11 +236,6 @@ func TestNewDispatchError(t *testing.T) {
 	if err.Hint == "" || err.Example == "" {
 		t.Fatalf("catalog-backed hint/example should both be populated: %+v", err)
 	}
-	wantSuggestion := strings.TrimSpace(err.Hint + " " + err.Example)
-	if err.Suggestion != wantSuggestion {
-		t.Errorf("suggestion = %q, want %q", err.Suggestion, wantSuggestion)
-	}
-
 	err = NewDispatchError("unknown_error", "Something broke", "Try again")
 	if err.Code != "unknown_error" {
 		t.Errorf("code = %q, want unknown_error", err.Code)
@@ -251,7 +243,7 @@ func TestNewDispatchError(t *testing.T) {
 	if err.Retryable {
 		t.Error("unknown error should not be retryable by default")
 	}
-	if err.Hint != "Try again" || err.Example != "" || err.Suggestion != "Try again" {
+	if err.Hint != "Try again" || err.Example != "" {
 		t.Errorf("unknown override path = %+v", err)
 	}
 }

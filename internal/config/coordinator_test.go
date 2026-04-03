@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestLoadCoordinatorFrontmatterAndBody(t *testing.T) {
+func TestLoadProfileFrontmatterAndBody(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
@@ -25,9 +25,9 @@ temperature: 0.2
 You are the planning coordinator.
 `)
 
-	spec, companion, err := LoadCoordinator("planner", cwd)
+	spec, companion, err := LoadProfile("planner", cwd)
 	if err != nil {
-		t.Fatalf("LoadCoordinator: %v", err)
+		t.Fatalf("LoadProfile: %v", err)
 	}
 	if companion != nil {
 		t.Fatalf("companion config = %#v, want nil", companion)
@@ -53,12 +53,9 @@ You are the planning coordinator.
 	if spec.SystemPrompt != "You are the planning coordinator.\n" {
 		t.Fatalf("SystemPrompt = %q, want body after frontmatter", spec.SystemPrompt)
 	}
-	if got, ok := spec.ExtraFields["temperature"]; !ok || got != 0.2 {
-		t.Fatalf("ExtraFields[temperature] = %#v, want %v", got, 0.2)
-	}
 }
 
-func TestLoadCoordinatorLoadsCompanionConfig(t *testing.T) {
+func TestLoadProfileLoadsCompanionConfig(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
@@ -81,9 +78,9 @@ model = "gemini-2.5-pro"
 effort = "medium"
 `)
 
-	spec, companion, err := LoadCoordinator("builder", cwd)
+	spec, companion, err := LoadProfile("builder", cwd)
 	if err != nil {
-		t.Fatalf("LoadCoordinator: %v", err)
+		t.Fatalf("LoadProfile: %v", err)
 	}
 	if spec.Model != "gpt-5.4-mini" {
 		t.Fatalf("frontmatter Model = %q, want %q", spec.Model, "gpt-5.4-mini")
@@ -105,7 +102,7 @@ effort = "medium"
 	}
 }
 
-func TestLoadCoordinatorRejectsNonPositiveFrontmatterTimeout(t *testing.T) {
+func TestLoadProfileRejectsNonPositiveFrontmatterTimeout(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
@@ -116,9 +113,9 @@ timeout: 0
 planner
 `)
 
-	_, _, err := LoadCoordinator("planner", cwd)
+	_, _, err := LoadProfile("planner", cwd)
 	if err == nil {
-		t.Fatal("LoadCoordinator error = nil, want validation error")
+		t.Fatal("LoadProfile error = nil, want validation error")
 	}
 	if !IsValidationError(err) {
 		t.Fatalf("error = %T %v, want validation error", err, err)
@@ -128,7 +125,7 @@ planner
 	}
 }
 
-func TestLoadCoordinatorRejectsNonPositiveCompanionTimeout(t *testing.T) {
+func TestLoadProfileRejectsNonPositiveCompanionTimeout(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
@@ -139,9 +136,9 @@ func TestLoadCoordinatorRejectsNonPositiveCompanionTimeout(t *testing.T) {
 grace = 0
 `)
 
-	_, _, err := LoadCoordinator("builder", cwd)
+	_, _, err := LoadProfile("builder", cwd)
 	if err == nil {
-		t.Fatal("LoadCoordinator error = nil, want validation error")
+		t.Fatal("LoadProfile error = nil, want validation error")
 	}
 	if !IsValidationError(err) {
 		t.Fatalf("error = %T %v, want validation error", err, err)
@@ -151,7 +148,7 @@ grace = 0
 	}
 }
 
-func TestLoadCoordinatorReturnsSeparateSourcesForPrecedence(t *testing.T) {
+func TestLoadProfileReturnsSeparateSourcesForPrecedence(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
@@ -171,9 +168,9 @@ model = "claude-sonnet-4-6"
 effort = "medium"
 `)
 
-	spec, companion, err := LoadCoordinator("orchestrator", cwd)
+	spec, companion, err := LoadProfile("orchestrator", cwd)
 	if err != nil {
-		t.Fatalf("LoadCoordinator: %v", err)
+		t.Fatalf("LoadProfile: %v", err)
 	}
 	if spec.Engine != "codex" || spec.Model != "gpt-5.4" || spec.Effort != "high" {
 		t.Fatalf("frontmatter fields = %#v, want coordinator overrides preserved separately", spec)
@@ -186,7 +183,7 @@ effort = "medium"
 	}
 }
 
-func TestLoadCoordinatorNotFoundListsAvailable(t *testing.T) {
+func TestLoadProfileNotFoundListsAvailable(t *testing.T) {
 	cwd := t.TempDir()
 	projectAgents := filepath.Join(cwd, ".claude", "agents")
 	home := t.TempDir()
@@ -198,9 +195,9 @@ func TestLoadCoordinatorNotFoundListsAvailable(t *testing.T) {
 	writeTestFile(t, filepath.Join(projectAgents, "alpha.md"), "Project alpha.")
 	writeTestFile(t, filepath.Join(globalAgents, "beta.md"), "Global beta.")
 
-	_, _, err := LoadCoordinator("missing", cwd)
+	_, _, err := LoadProfile("missing", cwd)
 	if err == nil {
-		t.Fatal("LoadCoordinator(missing) error = nil, want error")
+		t.Fatal("LoadProfile(missing) error = nil, want error")
 	}
 	msg := err.Error()
 	if !strings.Contains(msg, `profile "missing" not found`) {
@@ -211,19 +208,19 @@ func TestLoadCoordinatorNotFoundListsAvailable(t *testing.T) {
 	}
 }
 
-func TestLoadCoordinatorRejectsInvalidName(t *testing.T) {
+func TestLoadProfileRejectsInvalidName(t *testing.T) {
 	cwd := t.TempDir()
 
-	_, _, err := LoadCoordinator("../planner", cwd)
+	_, _, err := LoadProfile("../planner", cwd)
 	if err == nil {
-		t.Fatal("LoadCoordinator error = nil, want invalid profile name")
+		t.Fatal("LoadProfile error = nil, want invalid profile name")
 	}
 	if !strings.Contains(err.Error(), `invalid profile name "../planner"`) {
 		t.Fatalf("error = %q, want invalid profile name message", err)
 	}
 }
 
-func TestLoadCoordinatorSearchOrderProjectThenGlobal(t *testing.T) {
+func TestLoadProfileSearchOrderProjectThenGlobal(t *testing.T) {
 	cwd := t.TempDir()
 	projectAgents := filepath.Join(cwd, ".claude", "agents")
 	home := t.TempDir()
@@ -248,26 +245,26 @@ engine: gemini
 fallback prompt
 `)
 
-	spec, _, err := LoadCoordinator("shared", cwd)
+	spec, _, err := LoadProfile("shared", cwd)
 	if err != nil {
-		t.Fatalf("LoadCoordinator(shared): %v", err)
+		t.Fatalf("LoadProfile(shared): %v", err)
 	}
 	if spec.Model != "gpt-5.4" || spec.SystemPrompt != "project prompt\n" {
 		t.Fatalf("project coordinator = %#v, want project file to win", spec)
 	}
 
-	spec, _, err = LoadCoordinator("fallback", cwd)
+	spec, _, err = LoadProfile("fallback", cwd)
 	if err != nil {
-		t.Fatalf("LoadCoordinator(fallback): %v", err)
+		t.Fatalf("LoadProfile(fallback): %v", err)
 	}
 	if spec.Engine != "gemini" || spec.SystemPrompt != "fallback prompt\n" {
 		t.Fatalf("fallback coordinator = %#v, want global file used", spec)
 	}
 }
 
-// TestLoadCoordinatorAgentMuxDirSearchPaths verifies that the new .agent-mux/agents
+// TestLoadProfileAgentMuxDirSearchPaths verifies that the new .agent-mux/agents
 // project-level and ~/.agent-mux/agents global paths are searched.
-func TestLoadCoordinatorAgentMuxDirSearchPaths(t *testing.T) {
+func TestLoadProfileAgentMuxDirSearchPaths(t *testing.T) {
 	cwd := t.TempDir()
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -280,9 +277,9 @@ engine: codex
 ---
 lifted prompt
 `)
-		spec, _, err := LoadCoordinator("lifter", cwd)
+		spec, _, err := LoadProfile("lifter", cwd)
 		if err != nil {
-			t.Fatalf("LoadCoordinator: %v", err)
+			t.Fatalf("LoadProfile: %v", err)
 		}
 		if spec.Engine != "codex" || spec.SystemPrompt != "lifted prompt\n" {
 			t.Fatalf("spec = %#v, want .agent-mux/agents file", spec)
@@ -297,9 +294,9 @@ engine: claude
 ---
 global agent prompt
 `)
-		spec, _, err := LoadCoordinator("global-agent", cwd)
+		spec, _, err := LoadProfile("global-agent", cwd)
 		if err != nil {
-			t.Fatalf("LoadCoordinator: %v", err)
+			t.Fatalf("LoadProfile: %v", err)
 		}
 		if spec.Engine != "claude" || spec.SystemPrompt != "global agent prompt\n" {
 			t.Fatalf("spec = %#v, want ~/.agent-mux/agents file", spec)
@@ -307,16 +304,16 @@ global agent prompt
 	})
 }
 
-func TestLoadCoordinatorWithoutFrontmatterUsesBodyOnly(t *testing.T) {
+func TestLoadProfileWithoutFrontmatterUsesBodyOnly(t *testing.T) {
 	cwd := t.TempDir()
 	agentsDir := filepath.Join(cwd, ".claude", "agents")
 	mustMkdirAll(t, agentsDir)
 
 	writeTestFile(t, filepath.Join(agentsDir, "plain.md"), "Just the prompt body.\nSecond line.\n")
 
-	spec, companion, err := LoadCoordinator("plain", cwd)
+	spec, companion, err := LoadProfile("plain", cwd)
 	if err != nil {
-		t.Fatalf("LoadCoordinator: %v", err)
+		t.Fatalf("LoadProfile: %v", err)
 	}
 	if companion != nil {
 		t.Fatalf("companion config = %#v, want nil", companion)
@@ -326,9 +323,6 @@ func TestLoadCoordinatorWithoutFrontmatterUsesBodyOnly(t *testing.T) {
 	}
 	if spec.SystemPrompt != "Just the prompt body.\nSecond line.\n" {
 		t.Fatalf("SystemPrompt = %q, want full body", spec.SystemPrompt)
-	}
-	if len(spec.ExtraFields) != 0 {
-		t.Fatalf("ExtraFields = %#v, want empty map", spec.ExtraFields)
 	}
 }
 

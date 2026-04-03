@@ -10,19 +10,17 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-	"github.com/buildoak/agent-mux/internal/pipeline"
 )
 
 type Config struct {
-	Defaults  DefaultsConfig                     `toml:"defaults"`
-	Skills    SkillsConfig                       `toml:"skills"`
-	Models    map[string][]string                `toml:"models"`
-	Roles     map[string]RoleConfig              `toml:"roles"`
-	Pipelines map[string]pipeline.PipelineConfig `toml:"pipelines"`
-	Liveness  LivenessConfig                     `toml:"liveness"`
-	Timeout   TimeoutConfig                      `toml:"timeout"`
-	Hooks     HooksConfig                        `toml:"hooks"`
-	Async     AsyncConfig                        `toml:"async"`
+	Defaults DefaultsConfig        `toml:"defaults"`
+	Skills   SkillsConfig          `toml:"skills"`
+	Models   map[string][]string   `toml:"models"`
+	Roles    map[string]RoleConfig `toml:"roles"`
+	Liveness LivenessConfig        `toml:"liveness"`
+	Timeout  TimeoutConfig         `toml:"timeout"`
+	Hooks    HooksConfig           `toml:"hooks"`
+	Async    AsyncConfig           `toml:"async"`
 
 	meta *toml.MetaData
 }
@@ -117,9 +115,8 @@ func DefaultConfig() *Config {
 			MaxDepth:         2,
 			AllowSubdispatch: true,
 		},
-		Models:    make(map[string][]string),
-		Roles:     make(map[string]RoleConfig),
-		Pipelines: make(map[string]pipeline.PipelineConfig),
+		Models: make(map[string][]string),
+		Roles:  make(map[string]RoleConfig),
 		Liveness: LivenessConfig{
 			HeartbeatIntervalSec: 15,
 			SilenceWarnSeconds:   90,
@@ -228,14 +225,6 @@ func mergeConfig(base, overlay *Config) {
 				continue
 			}
 			base.Roles[name] = mergeRoleConfig(existing, role, overlay, name)
-		}
-	}
-	if len(overlay.Pipelines) > 0 {
-		if base.Pipelines == nil {
-			base.Pipelines = make(map[string]pipeline.PipelineConfig, len(overlay.Pipelines))
-		}
-		for name, cfg := range overlay.Pipelines {
-			base.Pipelines[name] = cfg
 		}
 	}
 	merge(&base.Liveness.HeartbeatIntervalSec, overlay.Liveness.HeartbeatIntervalSec, overlay.defined("liveness", "heartbeat_interval_sec"))

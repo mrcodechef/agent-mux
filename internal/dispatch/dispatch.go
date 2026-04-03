@@ -411,15 +411,12 @@ func NewDispatchError(code string, message string, suggestion string) *types.Dis
 		hint = suggestion
 		example = ""
 	}
-	suggestionText := strings.TrimSpace(hint + " " + example)
-
 	return &types.DispatchError{
-		Code:       code,
-		Message:    message,
-		Suggestion: suggestionText,
-		Hint:       hint,
-		Example:    example,
-		Retryable:  info.Retryable,
+		Code:      code,
+		Message:   message,
+		Hint:      hint,
+		Example:   example,
+		Retryable: info.Retryable,
 	}
 }
 func FuzzyMatchModel(input string, validModels []string) string {

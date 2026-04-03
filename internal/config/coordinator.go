@@ -20,7 +20,6 @@ type CoordinatorSpec struct {
 	Skills       []string
 	Timeout      int
 	SystemPrompt string
-	ExtraFields  map[string]any
 }
 
 func LoadProfile(name, cwd string) (*CoordinatorSpec, *Config, error) {
@@ -94,7 +93,6 @@ func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 	spec := &CoordinatorSpec{
 		Name:         name,
 		SystemPrompt: body,
-		ExtraFields:  map[string]any{},
 	}
 
 	if len(frontmatter) == 0 {
@@ -112,27 +110,21 @@ func loadCoordinatorSpec(path, name string) (*CoordinatorSpec, error) {
 		return nil, fmt.Errorf("decode frontmatter: %w", err)
 	}
 
-	var extra map[string]any
-	if err := yaml.Unmarshal(frontmatter, &extra); err != nil {
-		return nil, fmt.Errorf("decode frontmatter extra fields: %w", err)
+	var raw map[string]any
+	if err := yaml.Unmarshal(frontmatter, &raw); err != nil {
+		return nil, fmt.Errorf("decode frontmatter fields: %w", err)
 	}
-	if _, ok := extra["timeout"]; ok {
+	if _, ok := raw["timeout"]; ok {
 		if err := validatePositiveInt("timeout", path, parsed.Timeout); err != nil {
 			return nil, err
 		}
 	}
-	delete(extra, "model")
-	delete(extra, "effort")
-	delete(extra, "engine")
-	delete(extra, "skills")
-	delete(extra, "timeout")
 
 	spec.Model = parsed.Model
 	spec.Effort = parsed.Effort
 	spec.Engine = parsed.Engine
 	spec.Skills = append([]string(nil), parsed.Skills...)
 	spec.Timeout = parsed.Timeout
-	spec.ExtraFields = extra
 
 	return spec, nil
 }
@@ -218,8 +210,4 @@ func availableCoordinators(dirs []string) ([]string, error) {
 	}
 	sort.Strings(available)
 	return available, nil
-}
-
-func LoadCoordinator(name, cwd string) (*CoordinatorSpec, *Config, error) {
-	return LoadProfile(name, cwd)
 }

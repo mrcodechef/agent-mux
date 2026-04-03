@@ -119,12 +119,11 @@ func TestDispatchResultFailed(t *testing.T) {
 		HandoffSummary: "",
 		Artifacts:      []string{},
 		Error: &DispatchError{
-			Code:       "model_not_found",
-			Message:    "Model 'gpt-99' not found.",
-			Suggestion: "The selected model is not available for the current engine. Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
-			Hint:       "The selected model is not available for the current engine.",
-			Example:    "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
-			Retryable:  true,
+			Code:      "model_not_found",
+			Message:   "Model 'gpt-99' not found.",
+			Hint:      "The selected model is not available for the current engine.",
+			Example:   "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\".",
+			Retryable: true,
 		},
 		Activity:   &DispatchActivity{FilesChanged: []string{}, FilesRead: []string{}, CommandsRun: []string{}, ToolCalls: []string{}},
 		Metadata:   &DispatchMetadata{Engine: "codex", Model: "", Tokens: &TokenUsage{}},
@@ -161,9 +160,6 @@ func TestDispatchResultFailed(t *testing.T) {
 	}
 	if decoded.Error.Example != "Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\"." {
 		t.Errorf("error.example = %q", decoded.Error.Example)
-	}
-	if decoded.Error.Suggestion != "The selected model is not available for the current engine. Retry with a supported model. Example: agent-mux -e codex -m gpt-5.4 --cwd /repo \"<prompt>\"." {
-		t.Errorf("error.suggestion = %q", decoded.Error.Suggestion)
 	}
 }
 
@@ -266,15 +262,12 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 		Prompt:           "Build the parser",
 		Cwd:              "/path/to/project",
 		Profile:          "planner",
-		Pipeline:         "review",
 		ArtifactDir:      "/tmp/agent-mux/01JQXYZ/",
 		Variant:          "spark",
 		MaxDepth:         2,
 		AllowSubdispatch: true,
-		PipelineStep:     -1,
 		FullAccess:       true,
 		GraceSec:         60,
-		HandoffMode:      "summary_and_refs",
 		EngineOpts:       map[string]any{"sandbox": "danger-full-access"},
 	}
 
@@ -297,14 +290,8 @@ func TestDispatchSpecRoundTrip(t *testing.T) {
 	if decoded.Profile != "planner" {
 		t.Errorf("profile = %q, want %q", decoded.Profile, "planner")
 	}
-	if decoded.Pipeline != "review" {
-		t.Errorf("pipeline = %q, want %q", decoded.Pipeline, "review")
-	}
 	if decoded.Variant != "spark" {
 		t.Errorf("variant = %q, want %q", decoded.Variant, "spark")
-	}
-	if decoded.PipelineStep != -1 {
-		t.Errorf("pipeline_step = %d, want -1", decoded.PipelineStep)
 	}
 	if decoded.FullAccess != true {
 		t.Error("full_access should be true")
@@ -324,11 +311,9 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 		Cwd:                 "/tmp",
 		Profile:             "planner",
 		Variant:             "claude",
-		Pipeline:            "review",
 		ArtifactDir:         "/tmp/agent-mux/01JQXYZ/",
 		MaxDepth:            2,
 		AllowSubdispatch:    true,
-		PipelineStep:        -1,
 		FullAccess:          true,
 		ContinuesDispatchID: "01JABCD",
 		ResponseMaxChars:    2000,
@@ -346,9 +331,9 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 
 	expectedKeys := []string{
 		"dispatch_id", "trace_token", "engine", "effort", "prompt", "cwd",
-		"profile", "variant", "pipeline",
+		"profile", "variant",
 		"artifact_dir", "max_depth", "allow_subdispatch", "depth",
-		"pipeline_step", "full_access", "continues_dispatch_id",
+		"full_access", "continues_dispatch_id",
 		"response_max_chars",
 	}
 	for _, key := range expectedKeys {
@@ -363,7 +348,7 @@ func TestDispatchSpecJSONTagNames(t *testing.T) {
 
 func TestDispatchSpecUnmarshalAcceptsLegacyCoordinatorAlias(t *testing.T) {
 	var spec DispatchSpec
-	if err := json.Unmarshal([]byte(`{"dispatch_id":"01JQXYZ","engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","coordinator":"planner","allow_subdispatch":true,"depth":0,"pipeline_step":-1,"full_access":true}`), &spec); err != nil {
+	if err := json.Unmarshal([]byte(`{"dispatch_id":"01JQXYZ","engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","coordinator":"planner","allow_subdispatch":true,"depth":0,"full_access":true}`), &spec); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if spec.Profile != "planner" {
@@ -373,7 +358,7 @@ func TestDispatchSpecUnmarshalAcceptsLegacyCoordinatorAlias(t *testing.T) {
 
 func TestDispatchSpecUnmarshalRejectsConflictingProfileAlias(t *testing.T) {
 	var spec DispatchSpec
-	err := json.Unmarshal([]byte(`{"engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","profile":"planner","coordinator":"legacy","allow_subdispatch":true,"depth":0,"pipeline_step":-1,"full_access":true}`), &spec)
+	err := json.Unmarshal([]byte(`{"engine":"codex","prompt":"test","cwd":"/tmp","artifact_dir":"/tmp/agent-mux/01JQXYZ/","profile":"planner","coordinator":"legacy","allow_subdispatch":true,"depth":0,"full_access":true}`), &spec)
 	if err == nil {
 		t.Fatal("unmarshal error = nil, want conflict")
 	}

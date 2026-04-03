@@ -38,8 +38,8 @@ func TestGeminiCLIRejectsRetiredFlashModelBeforeLaunch(t *testing.T) {
 	if result.Error.Code != "model_not_found" {
 		t.Fatalf("error.code = %q, want %q", result.Error.Code, "model_not_found")
 	}
-	if !strings.Contains(result.Error.Suggestion, "gemini-2.5-flash") {
-		t.Fatalf("error.suggestion = %q, want to mention gemini-2.5-flash", result.Error.Suggestion)
+	if !strings.Contains(result.Error.Hint, "gemini-2.5-flash") {
+		t.Fatalf("error.hint = %q, want to mention gemini-2.5-flash", result.Error.Hint)
 	}
 	if _, err := os.Stat(markerPath); err == nil {
 		t.Fatal("stub gemini binary should not be invoked for a retired model slug")

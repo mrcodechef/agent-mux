@@ -39,7 +39,6 @@ type DispatchResult struct {
 type DispatchError struct {
 	Code             string   `json:"code"`
 	Message          string   `json:"message"`
-	Suggestion       string   `json:"suggestion"` // backward compat: Hint + " " + Example, trimmed
 	Hint             string   `json:"hint"`
 	Example          string   `json:"example"`
 	Retryable        bool     `json:"retryable"`
@@ -54,15 +53,13 @@ type DispatchActivity struct {
 }
 
 type DispatchMetadata struct {
-	Engine           string      `json:"engine"`
-	Model            string      `json:"model"`
-	Role             string      `json:"role,omitempty"`
-	Tokens           *TokenUsage `json:"tokens"`
-	Turns            int         `json:"turns"`
-	CostUSD          float64     `json:"cost_usd"`
-	SessionID        string      `json:"session_id,omitempty"`
-	PipelineID       string      `json:"pipeline_id,omitempty"`
-	ParentDispatchID string      `json:"parent_dispatch_id,omitempty"`
+	Engine    string      `json:"engine"`
+	Model     string      `json:"model"`
+	Role      string      `json:"role,omitempty"`
+	Tokens    *TokenUsage `json:"tokens"`
+	Turns     int         `json:"turns"`
+	CostUSD   float64     `json:"cost_usd"`
+	SessionID string      `json:"session_id,omitempty"`
 }
 
 type TokenUsage struct {
@@ -86,7 +83,6 @@ type DispatchSpec struct {
 	Skills              []string       `json:"skills,omitempty"`
 	SkipSkills          bool           `json:"skip_skills,omitempty"`
 	Profile             string         `json:"-"`
-	Pipeline            string         `json:"pipeline,omitempty"`
 	ContextFile         string         `json:"context_file,omitempty"`
 	ArtifactDir         string         `json:"artifact_dir"`
 	TimeoutSec          int            `json:"timeout_sec,omitempty"`
@@ -96,14 +92,7 @@ type DispatchSpec struct {
 	MaxDepth            int            `json:"max_depth"`
 	AllowSubdispatch    bool           `json:"allow_subdispatch"`
 	Depth               int            `json:"depth"`
-	ParentDispatchID    string         `json:"parent_dispatch_id,omitempty"`
-	PipelineID          string         `json:"pipeline_id,omitempty"`
-	PipelineStep        int            `json:"pipeline_step"`
 	ContinuesDispatchID string         `json:"continues_dispatch_id,omitempty"`
-	Receives            string         `json:"receives,omitempty"`
-	PassOutputAs        string         `json:"pass_output_as,omitempty"`
-	Parallel            int            `json:"parallel,omitempty"`
-	HandoffMode         string         `json:"handoff_mode,omitempty"`
 	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
 	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
 	FullAccess          bool           `json:"full_access"`
@@ -123,7 +112,6 @@ type dispatchSpecJSON struct {
 	SkipSkills          bool           `json:"skip_skills,omitempty"`
 	Profile             string         `json:"profile,omitempty"`
 	Coordinator         string         `json:"coordinator,omitempty"`
-	Pipeline            string         `json:"pipeline,omitempty"`
 	ContextFile         string         `json:"context_file,omitempty"`
 	ArtifactDir         string         `json:"artifact_dir"`
 	TimeoutSec          int            `json:"timeout_sec,omitempty"`
@@ -133,14 +121,7 @@ type dispatchSpecJSON struct {
 	MaxDepth            int            `json:"max_depth"`
 	AllowSubdispatch    bool           `json:"allow_subdispatch"`
 	Depth               int            `json:"depth"`
-	ParentDispatchID    string         `json:"parent_dispatch_id,omitempty"`
-	PipelineID          string         `json:"pipeline_id,omitempty"`
-	PipelineStep        int            `json:"pipeline_step"`
 	ContinuesDispatchID string         `json:"continues_dispatch_id,omitempty"`
-	Receives            string         `json:"receives,omitempty"`
-	PassOutputAs        string         `json:"pass_output_as,omitempty"`
-	Parallel            int            `json:"parallel,omitempty"`
-	HandoffMode         string         `json:"handoff_mode,omitempty"`
 	ResponseMaxChars    int            `json:"response_max_chars,omitempty"`
 	EngineOpts          map[string]any `json:"engine_opts,omitempty"`
 	FullAccess          bool           `json:"full_access"`
@@ -160,7 +141,6 @@ func (s DispatchSpec) MarshalJSON() ([]byte, error) {
 		Skills:              append([]string(nil), s.Skills...),
 		SkipSkills:          s.SkipSkills,
 		Profile:             s.Profile,
-		Pipeline:            s.Pipeline,
 		ContextFile:         s.ContextFile,
 		ArtifactDir:         s.ArtifactDir,
 		TimeoutSec:          s.TimeoutSec,
@@ -170,14 +150,7 @@ func (s DispatchSpec) MarshalJSON() ([]byte, error) {
 		MaxDepth:            s.MaxDepth,
 		AllowSubdispatch:    s.AllowSubdispatch,
 		Depth:               s.Depth,
-		ParentDispatchID:    s.ParentDispatchID,
-		PipelineID:          s.PipelineID,
-		PipelineStep:        s.PipelineStep,
 		ContinuesDispatchID: s.ContinuesDispatchID,
-		Receives:            s.Receives,
-		PassOutputAs:        s.PassOutputAs,
-		Parallel:            s.Parallel,
-		HandoffMode:         s.HandoffMode,
 		ResponseMaxChars:    s.ResponseMaxChars,
 		EngineOpts:          s.EngineOpts,
 		FullAccess:          s.FullAccess,
@@ -209,7 +182,6 @@ func (s *DispatchSpec) UnmarshalJSON(data []byte) error {
 		Skills:              append([]string(nil), wire.Skills...),
 		SkipSkills:          wire.SkipSkills,
 		Profile:             profile,
-		Pipeline:            wire.Pipeline,
 		ContextFile:         wire.ContextFile,
 		ArtifactDir:         wire.ArtifactDir,
 		TimeoutSec:          wire.TimeoutSec,
@@ -219,14 +191,7 @@ func (s *DispatchSpec) UnmarshalJSON(data []byte) error {
 		MaxDepth:            wire.MaxDepth,
 		AllowSubdispatch:    wire.AllowSubdispatch,
 		Depth:               wire.Depth,
-		ParentDispatchID:    wire.ParentDispatchID,
-		PipelineID:          wire.PipelineID,
-		PipelineStep:        wire.PipelineStep,
 		ContinuesDispatchID: wire.ContinuesDispatchID,
-		Receives:            wire.Receives,
-		PassOutputAs:        wire.PassOutputAs,
-		Parallel:            wire.Parallel,
-		HandoffMode:         wire.HandoffMode,
 		ResponseMaxChars:    wire.ResponseMaxChars,
 		EngineOpts:          wire.EngineOpts,
 		FullAccess:          wire.FullAccess,

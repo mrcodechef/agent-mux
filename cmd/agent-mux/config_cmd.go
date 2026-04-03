@@ -20,8 +20,6 @@ func runConfigCommand(args []string, stdout io.Writer) int {
 	switch sub {
 	case "roles":
 		return runConfigRoles(rest, stdout)
-	case "pipelines":
-		return runConfigPipelines(rest, stdout)
 	case "models":
 		return runConfigModels(rest, stdout)
 	case "skills":
@@ -38,7 +36,7 @@ func splitConfigSub(args []string) (string, []string) {
 		return "", nil
 	}
 	switch args[0] {
-	case "roles", "pipelines", "models", "skills":
+	case "roles", "models", "skills":
 		return args[0], args[1:]
 	default:
 		return "", args
@@ -163,57 +161,6 @@ func runConfigRoles(args []string, stdout io.Writer) int {
 			dashIfEmpty(e.Effort),
 			timeout,
 		)
-	}
-	_ = tw.Flush()
-	return 0
-}
-
-// --- agent-mux config pipelines ---
-
-func runConfigPipelines(args []string, stdout io.Writer) int {
-	var flagOutput bytes.Buffer
-	fs := flag.NewFlagSet("agent-mux config pipelines", flag.ContinueOnError)
-	fs.SetOutput(&flagOutput)
-
-	var configPath, cwd string
-	var jsonOutput bool
-	fs.StringVar(&configPath, "config", "", "Override config path")
-	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
-	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
-
-	if err := fs.Parse(normalizeArgs(args)); err != nil {
-		return handleLifecycleParseError(stdout, &flagOutput, err)
-	}
-
-	cfg, _, err := config.LoadConfigWithSources(configPath, cwd)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
-	}
-
-	type pipelineEntry struct {
-		Name  string `json:"name"`
-		Steps int    `json:"steps"`
-	}
-
-	names := sortedKeys(cfg.Pipelines)
-	entries := make([]pipelineEntry, 0, len(names))
-	for _, name := range names {
-		p := cfg.Pipelines[name]
-		entries = append(entries, pipelineEntry{
-			Name:  name,
-			Steps: len(p.Steps),
-		})
-	}
-
-	if jsonOutput {
-		writeCompactJSON(stdout, entries)
-		return 0
-	}
-
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tSTEPS")
-	for _, e := range entries {
-		fmt.Fprintf(tw, "%s\t%d\n", e.Name, e.Steps)
 	}
 	_ = tw.Flush()
 	return 0
@@ -357,52 +304,6 @@ func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 		roles[name] = r
 	}
 
-	pipelines := make(map[string]any, len(cfg.Pipelines))
-	for name, p := range cfg.Pipelines {
-		steps := make([]map[string]any, 0, len(p.Steps))
-		for _, s := range p.Steps {
-			sm := map[string]any{
-				"name": s.Name,
-				"role": s.Role,
-			}
-			if s.Variant != "" {
-				sm["variant"] = s.Variant
-			}
-			if s.Engine != "" {
-				sm["engine"] = s.Engine
-			}
-			if s.Model != "" {
-				sm["model"] = s.Model
-			}
-			if s.Effort != "" {
-				sm["effort"] = s.Effort
-			}
-			if s.Timeout > 0 {
-				sm["timeout"] = s.Timeout
-			}
-			if s.Parallel > 0 {
-				sm["parallel"] = s.Parallel
-			}
-			if len(s.WorkerPrompts) > 0 {
-				sm["worker_prompts"] = s.WorkerPrompts
-			}
-			if s.Receives != "" {
-				sm["receives"] = s.Receives
-			}
-			if s.PassOutputAs != "" {
-				sm["pass_output_as"] = s.PassOutputAs
-			}
-			if s.HandoffMode != "" {
-				sm["handoff_mode"] = s.HandoffMode
-			}
-			steps = append(steps, sm)
-		}
-		pipelines[name] = map[string]any{
-			"max_parallel": p.MaxParallel,
-			"steps":        steps,
-		}
-	}
-
 	timeout := map[string]any{
 		"low":    cfg.Timeout.Low,
 		"medium": cfg.Timeout.Medium,
@@ -428,14 +329,13 @@ func configToJSONMap(cfg *config.Config) (map[string]any, error) {
 	}
 
 	m := map[string]any{
-		"defaults":  defaults,
-		"models":    cfg.Models,
-		"roles":     roles,
-		"pipelines": pipelines,
-		"timeout":   timeout,
-		"liveness":  liveness,
-		"hooks":     hooks,
-		"async":     async,
+		"defaults": defaults,
+		"models":   cfg.Models,
+		"roles":    roles,
+		"timeout":  timeout,
+		"liveness": liveness,
+		"hooks":    hooks,
+		"async":    async,
 	}
 	return m, nil
 }

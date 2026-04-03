@@ -68,8 +68,8 @@ func TestUnknownFlagReturnsJSONError(t *testing.T) {
 	if !strings.Contains(result.Error.Message, "flag provided but not defined") {
 		t.Fatalf("error.message = %q, want parse failure", result.Error.Message)
 	}
-	if !strings.Contains(result.Error.Suggestion, "Usage of agent-mux") {
-		t.Fatalf("error.suggestion = %q, want usage text", result.Error.Suggestion)
+	if !strings.Contains(result.Error.Hint, "Usage of agent-mux") {
+		t.Fatalf("error.hint = %q, want usage text", result.Error.Hint)
 	}
 }
 
@@ -735,11 +735,11 @@ func TestExplicitPreviewLikeCommandShowsLiteralPromptGuidance(t *testing.T) {
 			if result.Error.Message != "missing prompt: provide the first positional arg or --prompt-file" {
 				t.Fatalf("error.message = %q, want missing prompt", result.Error.Message)
 			}
-			if !strings.Contains(result.Error.Suggestion, fmt.Sprintf("If you meant the literal prompt %q", tc.command)) {
-				t.Fatalf("error.suggestion = %q, want literal prompt guidance", result.Error.Suggestion)
+			if !strings.Contains(result.Error.Hint, fmt.Sprintf("If you meant the literal prompt %q", tc.command)) {
+				t.Fatalf("error.hint = %q, want literal prompt guidance", result.Error.Hint)
 			}
-			if !strings.Contains(result.Error.Suggestion, fmt.Sprintf("agent-mux -- %s", tc.command)) {
-				t.Fatalf("error.suggestion = %q, want -- escape hatch guidance", result.Error.Suggestion)
+			if !strings.Contains(result.Error.Hint, fmt.Sprintf("agent-mux -- %s", tc.command)) {
+				t.Fatalf("error.hint = %q, want -- escape hatch guidance", result.Error.Hint)
 			}
 		})
 	}
@@ -782,17 +782,11 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if !spec.AllowSubdispatch {
 		t.Fatal("allow_subdispatch = false, want true")
 	}
-	if spec.PipelineStep != -1 {
-		t.Fatalf("pipeline_step = %d, want -1", spec.PipelineStep)
-	}
 	if !spec.FullAccess {
 		t.Fatal("full_access = false, want true")
 	}
 	if spec.GraceSec != 60 {
 		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
-	}
-	if spec.HandoffMode != "summary_and_refs" {
-		t.Fatalf("handoff_mode = %q, want %q", spec.HandoffMode, "summary_and_refs")
 	}
 	wantArtifactDirPath, err := recovery.DefaultArtifactDir(spec.DispatchID)
 	if err != nil {
@@ -824,25 +818,6 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	}
 }
 
-func TestBuildDispatchSpecIncludesPipeline(t *testing.T) {
-	t.Parallel()
-
-	fs, parsed := newFlagSet(ioDiscard{})
-	err := fs.Parse([]string{"--engine", "codex", "--pipeline", "review", "implement feature"})
-	if err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags, positional := *parsed, fs.Args()
-
-	spec, err := buildDispatchSpecE(flags, positional)
-	if err != nil {
-		t.Fatalf("buildDispatchSpecE: %v", err)
-	}
-	if spec.Pipeline != "review" {
-		t.Fatalf("pipeline = %q, want %q", spec.Pipeline, "review")
-	}
-}
-
 func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
 	t.Parallel()
 
@@ -859,44 +834,6 @@ func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
 	}
 	if spec.Profile != "planner" {
 		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
-	}
-}
-
-func TestBuildDispatchSpecAcceptsLegacyCoordinatorFlag(t *testing.T) {
-	t.Parallel()
-
-	fs, parsed := newFlagSet(ioDiscard{})
-	err := fs.Parse([]string{"--engine", "codex", "--coordinator", "planner", "implement feature"})
-	if err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags, positional := *parsed, fs.Args()
-
-	spec, err := buildDispatchSpecE(flags, positional)
-	if err != nil {
-		t.Fatalf("buildDispatchSpecE: %v", err)
-	}
-	if spec.Profile != "planner" {
-		t.Fatalf("profile = %q, want %q", spec.Profile, "planner")
-	}
-}
-
-func TestBuildDispatchSpecRejectsConflictingProfileFlags(t *testing.T) {
-	t.Parallel()
-
-	fs, parsed := newFlagSet(ioDiscard{})
-	err := fs.Parse([]string{"--engine", "codex", "--profile", "planner", "--coordinator", "legacy", "implement feature"})
-	if err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags, positional := *parsed, fs.Args()
-
-	_, err = buildDispatchSpecE(flags, positional)
-	if err == nil {
-		t.Fatal("buildDispatchSpecE error = nil, want conflict")
-	}
-	if !strings.Contains(err.Error(), "conflicting profile values") {
-		t.Fatalf("error = %q, want conflicting profile values", err)
 	}
 }
 
@@ -1246,9 +1183,7 @@ func TestStdinMode(t *testing.T) {
 		ArtifactDir:      filepath.Join(t.TempDir(), "artifacts") + "/",
 		MaxDepth:         2,
 		AllowSubdispatch: true,
-		PipelineStep:     -1,
 		GraceSec:         60,
-		HandoffMode:      "summary_and_refs",
 		FullAccess:       true,
 		TimeoutSec:       5,
 	}
@@ -1454,19 +1389,13 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	if !spec.FullAccess {
 		t.Fatal("full_access = false, want true")
 	}
-	if spec.PipelineStep != -1 {
-		t.Fatalf("pipeline_step = %d, want -1", spec.PipelineStep)
-	}
 	if spec.GraceSec != 60 {
 		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
-	}
-	if spec.HandoffMode != "summary_and_refs" {
-		t.Fatalf("handoff_mode = %q, want %q", spec.HandoffMode, "summary_and_refs")
 	}
 }
 
 func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndAllowedZero(t *testing.T) {
-	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"pipeline_step":0,"response_max_chars":0}`))
+	spec, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","allow_subdispatch":false,"full_access":false,"response_max_chars":0}`))
 	if err != nil {
 		t.Fatalf("decodeStdinDispatchSpec: %v", err)
 	}
@@ -1476,9 +1405,6 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalseAndAllowedZero(t *testing.
 	}
 	if spec.FullAccess {
 		t.Fatal("full_access = true, want false")
-	}
-	if spec.PipelineStep != 0 {
-		t.Fatalf("pipeline_step = %d, want 0", spec.PipelineStep)
 	}
 	if spec.GraceSec != 60 {
 		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
@@ -1541,10 +1467,10 @@ func TestDecodeStdinDispatchSpecRejectsInvalidDispatchID(t *testing.T) {
 func TestDecodeStdinDispatchSpecRejectsInvalidCoordinatorAliasBeforeConflictResolution(t *testing.T) {
 	_, err := decodeStdinDispatchSpec(strings.NewReader(`{"engine":"codex","prompt":"from stdin","profile":"planner","coordinator":"../legacy"}`))
 	if err == nil {
-		t.Fatal("decodeStdinDispatchSpec error = nil, want invalid coordinator")
+		t.Fatal("decodeStdinDispatchSpec error = nil, want conflict")
 	}
-	if !strings.Contains(err.Error(), `invalid coordinator "../legacy"`) {
-		t.Fatalf("error = %q, want invalid coordinator message", err)
+	if !strings.Contains(err.Error(), `conflicting profile values`) {
+		t.Fatalf("error = %q, want conflicting profile values message", err)
 	}
 }
 
@@ -1569,21 +1495,6 @@ func TestRunPreviewRejectsInvalidSkillName(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := run([]string{"preview", "--engine", "codex", "--skill", "../bad", "hello"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodeResult(t, stdout.Bytes())
-	if result.Error == nil || result.Error.Code != "invalid_input" {
-		t.Fatalf("error = %#v, want invalid_input", result.Error)
-	}
-}
-
-func TestRunPreviewRejectsInvalidCoordinatorName(t *testing.T) {
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-
-	exitCode := run([]string{"preview", "--engine", "codex", "--profile", "planner", "--coordinator", "../legacy", "hello"}, strings.NewReader(""), &stdout, &stderr)
 	if exitCode != 1 {
 		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
@@ -1772,179 +1683,6 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 	}
 }
 
-func TestStdinPipelineDispatch(t *testing.T) {
-	isolateHome(t)
-
-	cfgPath := writeTempConfig(t, `
-[pipelines.review]
-[[pipelines.review.steps]]
-name = "review"
-`)
-	input := map[string]any{
-		"dispatch_id":  "stdin-pipeline-dispatch",
-		"engine":       "not-a-real-engine",
-		"prompt":       "from stdin",
-		"pipeline":     "review",
-		"cwd":          t.TempDir(),
-		"artifact_dir": filepath.Join(t.TempDir(), "artifacts"),
-	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"--stdin", "--config", cfgPath}, bytes.NewReader(data), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodePipelineResult(t, stdout.Bytes())
-	if result.SchemaVersion != 1 {
-		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
-	}
-	if result.PipelineID == "" {
-		t.Fatal("pipeline_id should be set")
-	}
-	if result.Status != "failed" {
-		t.Fatalf("status = %q, want failed", result.Status)
-	}
-	if len(result.Steps) != 1 {
-		t.Fatalf("len(steps) = %d, want 1", len(result.Steps))
-	}
-	if len(result.Steps[0].Workers) != 1 {
-		t.Fatalf("len(steps[0].workers) = %d, want 1", len(result.Steps[0].Workers))
-	}
-	if result.Steps[0].Workers[0].ErrorCode != "engine_not_found" {
-		t.Fatalf("workers[0].error_code = %q, want engine_not_found", result.Steps[0].Workers[0].ErrorCode)
-	}
-}
-
-func TestPipelineStepVariantResolvesRole(t *testing.T) {
-	isolateHome(t)
-
-	cfgPath := writeTempConfig(t, `
-[roles.lifter]
-engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-
-[roles.lifter.variants.spark]
-engine = "not-a-real-engine"
-
-[pipelines.review]
-[[pipelines.review.steps]]
-name = "review"
-role = "lifter"
-variant = "spark"
-`)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"--config", cfgPath,
-		"--engine", "codex",
-		"--pipeline", "review",
-		"implement feature",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodePipelineResult(t, stdout.Bytes())
-	if result.SchemaVersion != 1 {
-		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
-	}
-	if len(result.Steps) != 1 || len(result.Steps[0].Workers) != 1 {
-		t.Fatalf("pipeline result = %#v, want one worker", result)
-	}
-	if result.Steps[0].Workers[0].ErrorCode != "engine_not_found" {
-		t.Fatalf("workers[0].error_code = %q, want engine_not_found from variant engine", result.Steps[0].Workers[0].ErrorCode)
-	}
-}
-
-func TestPipelineValidationErrorUsesPipelineEnvelope(t *testing.T) {
-	isolateHome(t)
-
-	cfgPath := writeTempConfig(t, `
-[pipelines.review]
-[[pipelines.review.steps]]
-name = "plan"
-pass_output_as = "shared"
-
-[[pipelines.review.steps]]
-name = "execute"
-pass_output_as = "shared"
-`)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"--config", cfgPath,
-		"--engine", "codex",
-		"--pipeline", "review",
-		"implement feature",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodePipelineResult(t, stdout.Bytes())
-	if result.SchemaVersion != 1 {
-		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("status = %q, want failed", result.Status)
-	}
-	if result.Error == nil || result.Error.Code != "config_error" {
-		t.Fatalf("error = %#v, want config_error", result.Error)
-	}
-	if !strings.Contains(result.Error.Message, "validation failed") {
-		t.Fatalf("error.message = %q, want validation failure", result.Error.Message)
-	}
-}
-
-func TestPipelineSetupErrorUsesPipelineEnvelope(t *testing.T) {
-	isolateHome(t)
-
-	cfgPath := writeTempConfig(t, `
-[pipelines.review]
-[[pipelines.review.steps]]
-name = "review"
-role = "missing-role"
-`)
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"--config", cfgPath,
-		"--engine", "codex",
-		"--pipeline", "review",
-		"implement feature",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodePipelineResult(t, stdout.Bytes())
-	if result.SchemaVersion != 1 {
-		t.Fatalf("schema_version = %d, want 1", result.SchemaVersion)
-	}
-	if result.Status != "failed" {
-		t.Fatalf("status = %q, want failed", result.Status)
-	}
-	if result.Error == nil || result.Error.Code != "config_error" {
-		t.Fatalf("error = %#v, want config_error", result.Error)
-	}
-	if !strings.Contains(result.Error.Message, `resolve pipeline step[0] role "missing-role"`) {
-		t.Fatalf("error.message = %q, want setup failure", result.Error.Message)
-	}
-	if len(result.Steps) != 0 {
-		t.Fatalf("len(steps) = %d, want 0", len(result.Steps))
-	}
-}
-
 func TestSteerNudgeUsesFIFOWhenReady(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("FIFO steering is Unix-only")
@@ -2030,33 +1768,6 @@ func TestSteerRedirectFIFOWriteErrorsFallbackToInbox(t *testing.T) {
 	}
 }
 
-func TestSteerStatusAliasMatchesCanonicalJSONAndWarns(t *testing.T) {
-	dispatchID, _ := prepareSteerDispatchFixture(t, false)
-
-	var statusStdout bytes.Buffer
-	var statusStderr bytes.Buffer
-	statusExit := run([]string{"status", "--json", dispatchID}, strings.NewReader(""), &statusStdout, &statusStderr)
-	if statusExit != 0 {
-		t.Fatalf("status exit code = %d, want 0; stderr=%q stdout=%q", statusExit, statusStderr.String(), statusStdout.String())
-	}
-	if statusStderr.Len() != 0 {
-		t.Fatalf("status stderr = %q, want empty", statusStderr.String())
-	}
-
-	var aliasStdout bytes.Buffer
-	var aliasStderr bytes.Buffer
-	aliasExit := run([]string{"steer", dispatchID, "status"}, strings.NewReader(""), &aliasStdout, &aliasStderr)
-	if aliasExit != 0 {
-		t.Fatalf("alias exit code = %d, want 0; stderr=%q stdout=%q", aliasExit, aliasStderr.String(), aliasStdout.String())
-	}
-	if aliasStdout.String() != statusStdout.String() {
-		t.Fatalf("alias stdout = %q, want canonical status stdout %q", aliasStdout.String(), statusStdout.String())
-	}
-	if !strings.Contains(aliasStderr.String(), "agent-mux status --json <id>") {
-		t.Fatalf("alias stderr = %q, want deprecation warning", aliasStderr.String())
-	}
-}
-
 func TestSteerUsageNoLongerAdvertisesStatus(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -2074,12 +1785,12 @@ func TestSteerUsageNoLongerAdvertisesStatus(t *testing.T) {
 	if !ok {
 		t.Fatalf("error = %#v, want object", raw["error"])
 	}
-	suggestion, ok := errorEnvelope["suggestion"].(string)
+	hint, ok := errorEnvelope["hint"].(string)
 	if !ok {
-		t.Fatalf("suggestion = %#v, want string", errorEnvelope["suggestion"])
+		t.Fatalf("hint = %#v, want string", errorEnvelope["hint"])
 	}
-	if strings.Contains(suggestion, "status") {
-		t.Fatalf("suggestion = %q, want steer actions without status", suggestion)
+	if strings.Contains(hint, "status") {
+		t.Fatalf("hint = %q, want steer actions without status", hint)
 	}
 }
 
@@ -2462,28 +2173,6 @@ func stringSliceFromJSONValue(t *testing.T, value any) []string {
 		out = append(out, s)
 	}
 	return out
-}
-
-type pipelineResultForTest struct {
-	SchemaVersion int                  `json:"schema_version"`
-	PipelineID    string               `json:"pipeline_id"`
-	Status        string               `json:"status"`
-	Error         *types.DispatchError `json:"error,omitempty"`
-	Steps         []struct {
-		Workers []struct {
-			ErrorCode string `json:"error_code"`
-		} `json:"workers"`
-	} `json:"steps"`
-}
-
-func decodePipelineResult(t *testing.T, data []byte) pipelineResultForTest {
-	t.Helper()
-
-	var result pipelineResultForTest
-	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatalf("unmarshal PipelineResult: %v\nstdout=%q", err, string(data))
-	}
-	return result
 }
 
 func readDispatchMeta(t *testing.T, artifactDir string) dispatchMetaForTest {
