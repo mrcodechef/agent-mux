@@ -304,7 +304,7 @@ Answer these specific questions precisely:
 
 		checklist := `Check each question was answered correctly:
 1. response is the full worker response text; handoff_summary is extracted from ## Summary/## Handoff headers or shortened. They are NOT the same.
-2. full_output_path is set when response was truncated due to response_max_chars; null otherwise.
+2. full_output_path is set when the worker wrote a file artifact; null otherwise.
 3. status can be: completed (clean exit), timed_out (timeout), failed (validation/startup/adapter error).
 4. partial=true and recoverable=true appear on timed_out runs. partial means work is incomplete, recoverable means it can be resumed.
 5. hint is guidance text; example is the corrective command example.

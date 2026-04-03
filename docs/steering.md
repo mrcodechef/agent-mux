@@ -71,7 +71,7 @@ Redirects the worker with new instructions. On live Codex workers with a ready s
 
 ## FIFO Soft Steering For Codex
 
-Codex dispatches on Unix create `stdin.pipe` inside the artifact directory and keep a reader open for the dispatch lifetime. `agent-mux steer <id> nudge|redirect` checks `_dispatch_meta.json`, `status.json`, and `host.pid`; when the worker is still running and `stdin_pipe_ready` is true, the CLI writes a single JSON envelope to the FIFO and closes it immediately.
+Codex dispatches on Unix create `stdin.pipe` inside the artifact directory and keep a reader open for the dispatch lifetime. `agent-mux steer <id> nudge|redirect` checks `_dispatch_meta.json`, `status.json`, and `host.pid` in the artifact directory; when the worker is still running and `stdin_pipe_ready` is true, the CLI writes a single JSON envelope to the FIFO and closes it immediately. The artifact directory is resolved from the durable dispatch record at `~/.agent-mux/dispatches/<dispatch_id>/meta.json`, which persists it independent of process lifetime.
 
 This path avoids the inbox -> stop -> resume cycle. The LoopEngine receives the envelope, emits `coordinator_inject`, and writes the formatted steer text into the live Codex stdin pipe. If a tool call is active, delivery is deferred until the tool ends.
 
