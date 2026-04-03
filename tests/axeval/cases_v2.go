@@ -158,9 +158,9 @@ func buildCasesV2(cwd string) []TestCase {
 					if err != nil {
 						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
-					response, _ := jsonStringField(raw, "response")
-					if strings.TrimSpace(response) == "" {
-						return Verdict{Pass: false, Score: 0.0, Reason: "scout response is empty"}
+					response, ok := jsonStringField(raw, "response")
+					if !ok || strings.TrimSpace(response) == "" {
+						return Verdict{Pass: false, Score: 0.0, Reason: "scout response is empty or missing"}
 					}
 					return Verdict{Pass: true, Score: 1.0, Reason: "scout role completed with non-empty response"}
 				},
@@ -210,6 +210,7 @@ func buildCasesV2(cwd string) []TestCase {
 					return Verdict{Pass: true, Score: 1.0, Reason: "meta.json fields valid"}
 				},
 				artifactExists("events.jsonl"),
+				artifactExists("proof.txt"),
 				func(r Result) Verdict {
 					status, err := artifactJSONObject(r, "status.json")
 					if err != nil {

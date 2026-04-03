@@ -14,9 +14,8 @@ import (
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
-	"github.com/buildoak/agent-mux/internal/fifo"
-	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/sanitize"
+	"github.com/buildoak/agent-mux/internal/steer"
 )
 
 const defaultNudgeMessage = "Please wrap up your current work and provide a final summary."
@@ -246,9 +245,9 @@ func tryFIFOInject(artifactDir, action, message string) (mechanism string, deliv
 	if err != nil {
 		return "", false, err
 	}
-	pipe, err := fifo.OpenWriteNonblock(fifo.Path(artifactDir))
+	pipe, err := steer.OpenWriteNonblock(steer.Path(artifactDir))
 	if err != nil {
-		if errors.Is(err, fifo.ErrUnsupported) || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENXIO) {
+		if errors.Is(err, steer.ErrUnsupported) || errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENXIO) {
 			return "", false, nil
 		}
 		return "", false, err
@@ -266,10 +265,10 @@ func tryFIFOInject(artifactDir, action, message string) (mechanism string, deliv
 func writeInboxSteer(artifactDir, action, message string) error {
 	switch action {
 	case "redirect":
-		return inbox.WriteInbox(artifactDir, "[REDIRECT] "+message)
+		return steer.WriteInbox(artifactDir, "[REDIRECT] "+message)
 	case "nudge":
-		return inbox.WriteInbox(artifactDir, "[NUDGE] "+message)
+		return steer.WriteInbox(artifactDir, "[NUDGE] "+message)
 	default:
-		return inbox.WriteInbox(artifactDir, message)
+		return steer.WriteInbox(artifactDir, message)
 	}
 }

@@ -24,9 +24,9 @@ import (
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/hooks"
-	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
+	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
 	"github.com/oklog/ulid/v2"
 	"golang.org/x/term"
@@ -218,7 +218,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 			return 1
 		}
 		msg := positional[0]
-		if err := inbox.WriteInbox(resolved.ArtifactDir, msg); err != nil {
+		if err := steer.WriteInbox(resolved.ArtifactDir, msg); err != nil {
 			emitResult(stdout, buildSignalErrorAck(flags.signal, "config_error", err.Error(), "Ensure the inbox path is writable and retry."))
 			return 1
 		}

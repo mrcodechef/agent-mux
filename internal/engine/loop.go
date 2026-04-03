@@ -19,9 +19,8 @@ import (
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
-	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/hooks"
-	"github.com/buildoak/agent-mux/internal/inbox"
+	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/supervisor"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -84,8 +83,8 @@ func (e *LoopEngine) scanHarnessOutput(stdout io.Reader, runGen uint64, artifact
 			signals <- loopSignal{kind: loopSignalEvent, runGen: runGen, event: evt}
 		}
 
-		if inbox.HasMessages(artifactDir) {
-			messages, err := inbox.ReadInbox(artifactDir)
+		if steer.HasMessages(artifactDir) {
+			messages, err := steer.ReadInbox(artifactDir)
 			if err != nil {
 				signals <- loopSignal{kind: loopSignalScanError, runGen: runGen, err: fmt.Errorf("read coordinator inbox: %w", err)}
 				continue
@@ -157,7 +156,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if err := dispatch.WritePersistentMeta(spec, e.annotations); err != nil {
 		return buildFailureResult(spec, e.annotations, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write persistent dispatch metadata for %q: %v", spec.DispatchID, err), "Ensure ~/.agent-mux/dispatches is writable."), nil
 	}
-	inboxCreateErr := inbox.CreateInbox(spec.ArtifactDir)
+	inboxCreateErr := steer.CreateInbox(spec.ArtifactDir)
 	if inboxCreateErr != nil {
 		if e.verbose && e.eventWriter != nil {
 			fmt.Fprintf(e.eventWriter, "[engine] create inbox: %v\n", inboxCreateErr)
@@ -453,10 +452,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 
 	enqueueInboxMessages := func() {
-		if !inbox.HasMessages(spec.ArtifactDir) {
+		if !steer.HasMessages(spec.ArtifactDir) {
 			return
 		}
-		messages, err := inbox.ReadInbox(spec.ArtifactDir)
+		messages, err := steer.ReadInbox(spec.ArtifactDir)
 		if err != nil {
 			_ = emitter.EmitError("coordinator_inbox_read_failed", fmt.Sprintf("Read coordinator inbox: %v", err))
 			return
@@ -709,7 +708,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	if bridge, err := startSoftStdinBridge(spec.ArtifactDir, signals); err == nil {
 		stdinBridge = bridge
 		stdinPipeReady = true
-	} else if !errors.Is(err, fifo.ErrUnsupported) {
+	} else if !errors.Is(err, steer.ErrUnsupported) {
 		return buildFailureResult(
 			spec, e.annotations, metadata, startTime, emitter,
 			"startup_failed",
@@ -775,7 +774,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case <-softTimer:
 			softTimedOut = true
 			_ = emitter.EmitTimeoutWarning(fmt.Sprintf("Soft timeout reached. Grace period: %ds.", spec.GraceSec))
-			_ = inbox.WriteInbox(spec.ArtifactDir, "Soft timeout reached. Wrap up your current work, write any final artifacts to $AGENT_MUX_ARTIFACT_DIR, and return a summary of what you completed and what remains.")
+			_ = steer.WriteInbox(spec.ArtifactDir, "Soft timeout reached. Wrap up your current work, write any final artifacts to $AGENT_MUX_ARTIFACT_DIR, and return a summary of what you completed and what remains.")
 			if gracePeriod > 0 {
 				softTimer = nil
 				hardTimer = time.After(gracePeriod)
@@ -1360,19 +1359,19 @@ func formatSteerMessage(message string) string {
 }
 
 func startSoftStdinBridge(artifactDir string, signals chan<- loopSignal) (*softStdinBridge, error) {
-	path := fifo.Path(artifactDir)
-	if err := fifo.Create(path); err != nil {
+	path := steer.Path(artifactDir)
+	if err := steer.Create(path); err != nil {
 		return nil, err
 	}
-	readFile, err := fifo.OpenReadNonblock(path)
+	readFile, err := steer.OpenReadNonblock(path)
 	if err != nil {
-		_ = fifo.Remove(path)
+		_ = steer.Remove(path)
 		return nil, err
 	}
-	keepaliveFile, err := fifo.OpenWriteNonblock(path)
+	keepaliveFile, err := steer.OpenWriteNonblock(path)
 	if err != nil {
 		_ = readFile.Close()
-		_ = fifo.Remove(path)
+		_ = steer.Remove(path)
 		return nil, err
 	}
 	bridge := &softStdinBridge{
@@ -1399,7 +1398,7 @@ func (b *softStdinBridge) close() error {
 			errs = append(errs, err)
 		}
 	}
-	if err := fifo.Remove(b.path); err != nil && !errors.Is(err, fifo.ErrUnsupported) {
+	if err := steer.Remove(b.path); err != nil && !errors.Is(err, steer.ErrUnsupported) {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

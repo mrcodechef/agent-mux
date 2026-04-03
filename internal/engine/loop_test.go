@@ -17,8 +17,7 @@ import (
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
 	"github.com/buildoak/agent-mux/internal/event"
-	"github.com/buildoak/agent-mux/internal/fifo"
-	"github.com/buildoak/agent-mux/internal/inbox"
+	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -666,7 +665,7 @@ func TestLoopEngineDiscardStaleSignalsFromOldRun(t *testing.T) {
 
 func TestScanHarnessOutputDeliversInboxSignalWhenChannelWasFull(t *testing.T) {
 	artifactDir := t.TempDir()
-	if err := inbox.CreateInbox(artifactDir); err != nil {
+	if err := steer.CreateInbox(artifactDir); err != nil {
 		t.Fatalf("CreateInbox: %v", err)
 	}
 
@@ -695,7 +694,7 @@ func TestScanHarnessOutputDeliversInboxSignalWhenChannelWasFull(t *testing.T) {
 		t.Fatal("timed out waiting for session signal")
 	}
 
-	if err := inbox.WriteInbox(artifactDir, "resume during burst"); err != nil {
+	if err := steer.WriteInbox(artifactDir, "resume during burst"); err != nil {
 		t.Fatalf("write inbox: %v", err)
 	}
 	signals <- loopSignal{kind: loopSignalEvent, runGen: 7}
@@ -722,7 +721,7 @@ func TestScanHarnessOutputDeliversInboxSignalWhenChannelWasFull(t *testing.T) {
 		t.Fatal("timed out waiting for inbox signal")
 	}
 
-	if inbox.HasMessages(artifactDir) {
+	if steer.HasMessages(artifactDir) {
 		t.Fatal("inbox still has messages after delivery")
 	}
 
@@ -813,7 +812,7 @@ func runDispatchWithInboxMessageAndSpec(t *testing.T, adapter *scriptedAdapter, 
 
 	artifactDir := spec.ArtifactDir
 	waitForPath(t, readyPath)
-	if err := inbox.WriteInbox(artifactDir, message); err != nil {
+	if err := steer.WriteInbox(artifactDir, message); err != nil {
 		t.Fatalf("write inbox: %v", err)
 	}
 
@@ -1213,7 +1212,7 @@ func TestSoftSteerFIFOInjectsWithoutResume(t *testing.T) {
 		outcomeCh <- dispatchOutcome{result: result, err: err}
 	}()
 
-	waitForPath(t, fifo.Path(artifactDir))
+	waitForPath(t, steer.Path(artifactDir))
 	writeSoftSteerFIFO(t, artifactDir, "nudge", "FIFO nudge message")
 
 	select {
@@ -1276,7 +1275,7 @@ func TestSoftSteerFIFODeferredUntilToolEnd(t *testing.T) {
 		outcomeCh <- dispatchOutcome{result: result, err: err}
 	}()
 
-	waitForPath(t, fifo.Path(artifactDir))
+	waitForPath(t, steer.Path(artifactDir))
 	time.Sleep(150 * time.Millisecond)
 	writeSoftSteerFIFO(t, artifactDir, "nudge", "deferred message")
 
@@ -1331,7 +1330,7 @@ func TestSoftSteerFIFOCleanupRemovesPipe(t *testing.T) {
 		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
 	}
 
-	if _, err := os.Stat(fifo.Path(artifactDir)); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(steer.Path(artifactDir)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stdin.pipe stat error = %v, want not exists", err)
 	}
 }
@@ -1464,9 +1463,9 @@ func writeSoftSteerFIFO(t *testing.T, artifactDir, action, message string) {
 	if err != nil {
 		t.Fatalf("EncodeSoftSteerEnvelope: %v", err)
 	}
-	pipe, err := fifo.OpenWriteNonblock(fifo.Path(artifactDir))
+	pipe, err := steer.OpenWriteNonblock(steer.Path(artifactDir))
 	if err != nil {
-		t.Fatalf("OpenWriteNonblock(%q): %v", fifo.Path(artifactDir), err)
+		t.Fatalf("OpenWriteNonblock(%q): %v", steer.Path(artifactDir), err)
 	}
 	defer pipe.Close()
 	if _, err := pipe.Write(payload); err != nil {

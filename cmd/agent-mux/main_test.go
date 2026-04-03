@@ -16,10 +16,9 @@ import (
 
 	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
-	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/hooks"
-	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/recovery"
+	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -1626,7 +1625,7 @@ func TestSignalAndRecoverResolveCustomArtifactDispatch(t *testing.T) {
 		t.Fatalf("signal exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
 	}
 
-	messages, err := inbox.ReadInbox(absoluteArtifactDir)
+	messages, err := steer.ReadInbox(absoluteArtifactDir)
 	if err != nil {
 		t.Fatalf("ReadInbox: %v", err)
 	}
@@ -1671,12 +1670,12 @@ func TestSteerNudgeUsesFIFOWhenReady(t *testing.T) {
 	}
 
 	dispatchID, artifactDir := prepareSteerDispatchFixture(t, true)
-	if err := fifo.Create(fifo.Path(artifactDir)); err != nil {
+	if err := steer.Create(steer.Path(artifactDir)); err != nil {
 		t.Fatalf("Create(stdin.pipe): %v", err)
 	}
-	reader, err := fifo.OpenReadNonblock(fifo.Path(artifactDir))
+	reader, err := steer.OpenReadNonblock(steer.Path(artifactDir))
 	if err != nil {
-		t.Fatalf("OpenReadNonblock(%q): %v", fifo.Path(artifactDir), err)
+		t.Fatalf("OpenReadNonblock(%q): %v", steer.Path(artifactDir), err)
 	}
 	defer reader.Close()
 
@@ -1711,7 +1710,7 @@ func TestSteerNudgeFallsBackToInboxWhenFIFOUnavailable(t *testing.T) {
 		t.Fatalf("mechanism = %#v, want inbox", raw["mechanism"])
 	}
 
-	messages, err := inbox.ReadInbox(artifactDir)
+	messages, err := steer.ReadInbox(artifactDir)
 	if err != nil {
 		t.Fatalf("ReadInbox: %v", err)
 	}
@@ -1726,7 +1725,7 @@ func TestSteerRedirectFIFOWriteErrorsFallbackToInbox(t *testing.T) {
 	}
 
 	dispatchID, artifactDir := prepareSteerDispatchFixture(t, true)
-	if err := fifo.Create(fifo.Path(artifactDir)); err != nil {
+	if err := steer.Create(steer.Path(artifactDir)); err != nil {
 		t.Fatalf("Create(stdin.pipe): %v", err)
 	}
 
@@ -1741,7 +1740,7 @@ func TestSteerRedirectFIFOWriteErrorsFallbackToInbox(t *testing.T) {
 		t.Fatalf("mechanism = %#v, want inbox", raw["mechanism"])
 	}
 
-	messages, err := inbox.ReadInbox(artifactDir)
+	messages, err := steer.ReadInbox(artifactDir)
 	if err != nil {
 		t.Fatalf("ReadInbox: %v", err)
 	}

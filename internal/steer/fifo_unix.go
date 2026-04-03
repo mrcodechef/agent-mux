@@ -1,6 +1,6 @@
 //go:build !windows
 
-package fifo
+package steer
 
 import (
 	"errors"
