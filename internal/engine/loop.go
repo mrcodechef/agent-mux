@@ -15,7 +15,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	"unicode/utf8"
 
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/engine/adapter"
@@ -23,7 +22,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
-	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/supervisor"
 	"github.com/buildoak/agent-mux/internal/types"
 )
@@ -152,6 +150,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 	}
 	if err := dispatch.WriteDispatchMeta(spec.ArtifactDir, spec); err != nil {
 		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write dispatch metadata in %q: %v", spec.ArtifactDir, err), "Ensure the artifact directory is writable."), nil
+	}
+	if err := dispatch.WritePersistentMeta(spec); err != nil {
+		return buildFailureResult(spec, metadata, startTime, nil, "artifact_dir_unwritable", fmt.Sprintf("Write persistent dispatch metadata for %q: %v", spec.DispatchID, err), "Ensure ~/.agent-mux/dispatches is writable."), nil
 	}
 	inboxCreateErr := inbox.CreateInbox(spec.ArtifactDir)
 	if inboxCreateErr != nil {
@@ -1108,45 +1109,14 @@ func persistDispatchRecord(spec *types.DispatchSpec, result *types.DispatchResul
 	}
 
 	startedAt, endedAt := dispatchWindow(spec.ArtifactDir, result.DurationMS)
-	record := store.DispatchRecord{
-		ID:            firstNonEmpty(result.DispatchID, spec.DispatchID),
-		Salt:          firstNonEmpty(result.DispatchSalt, spec.Salt),
-		TraceToken:    firstNonEmpty(result.TraceToken, spec.TraceToken),
-		SessionID:     metadataSessionID(result),
-		Status:        string(result.Status),
-		Engine:        firstNonEmpty(metadataEngine(result), spec.Engine),
-		Model:         firstNonEmpty(metadataModel(result), spec.Model),
-		Role:          firstNonEmpty(metadataRole(result), spec.Role),
-		Variant:       spec.Variant,
-		StartedAt:     startedAt,
-		EndedAt:       endedAt,
-		DurationMs:    result.DurationMS,
-		Cwd:           spec.Cwd,
-		Truncated:     result.ResponseTruncated,
-		ResponseChars: utf8.RuneCountInString(responseText),
-		ArtifactDir:   spec.ArtifactDir,
-	}
-
-	// FM-15: Log store errors as warnings rather than silently discarding.
-	if err := store.AppendRecord("", record); err != nil {
+	if err := dispatch.WritePersistentResult(spec, result, responseText, startedAt, endedAt); err != nil {
 		if emitter != nil {
 			_ = emitter.Emit(event.Event{
 				Type:      "warning",
-				ErrorCode: "store_append_failed",
-				Message:   fmt.Sprintf("Persist dispatch record: %v", err),
-			})
-		}
-	}
-	if err := store.WriteResult("", record.ID, responseText); err != nil {
-		if emitter != nil {
-			_ = emitter.Emit(event.Event{
-				Type:      "warning",
-				ErrorCode: "store_write_result_failed",
+				ErrorCode: "persist_result_failed",
 				Message:   fmt.Sprintf("Persist dispatch result: %v", err),
 			})
 		}
-		// Fallback: write response to full_output.md in the artifact dir so
-		// it remains recoverable even when the store result file fails.
 		if responseText != "" && spec.ArtifactDir != "" {
 			_, _ = dispatch.WriteFullOutput(spec.ArtifactDir, responseText)
 		}

@@ -20,7 +20,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/inbox"
 	"github.com/buildoak/agent-mux/internal/recovery"
-	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -288,7 +287,7 @@ func TestListCommandJSONOutputsNDJSON(t *testing.T) {
 	}
 
 	for _, line := range lines {
-		var record store.DispatchRecord
+		var record dispatch.DispatchRecord
 		if err := json.Unmarshal([]byte(line), &record); err != nil {
 			t.Fatalf("unmarshal NDJSON line %q: %v", line, err)
 		}
@@ -1992,26 +1991,70 @@ func writeTestSkillFile(t *testing.T, cwd, name, content string) {
 	}
 }
 
-func writeStoreRecord(t *testing.T, record store.DispatchRecord, response string, writeResult bool) {
+func writeStoreRecord(t *testing.T, record dispatch.DispatchRecord, response string, writeResult bool) {
 	t.Helper()
 
-	if err := store.AppendRecord("", record); err != nil {
-		t.Fatalf("AppendRecord: %v", err)
+	spec := &types.DispatchSpec{
+		DispatchID:  record.ID,
+		Salt:        record.Salt,
+		TraceToken:  record.TraceToken,
+		Engine:      record.Engine,
+		Model:       record.Model,
+		Effort:      record.Effort,
+		Role:        record.Role,
+		Variant:     record.Variant,
+		Profile:     record.Profile,
+		Cwd:         record.Cwd,
+		ArtifactDir: record.ArtifactDir,
+		TimeoutSec:  record.TimeoutSec,
+		Prompt:      "test prompt",
+	}
+	if err := os.MkdirAll(record.ArtifactDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(artifactDir): %v", err)
+	}
+	if err := dispatch.WriteDispatchMeta(record.ArtifactDir, spec); err != nil {
+		t.Fatalf("WriteDispatchMeta: %v", err)
+	}
+	if err := dispatch.WritePersistentMeta(spec); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	if record.SessionID != "" {
+		if err := dispatch.UpdateDispatchSessionID(record.ArtifactDir, record.SessionID); err != nil {
+			t.Fatalf("UpdateDispatchSessionID: %v", err)
+		}
 	}
 	if writeResult {
-		if err := store.WriteResult("", record.ID, response); err != nil {
-			t.Fatalf("WriteResult: %v", err)
+		result := &types.DispatchResult{
+			SchemaVersion:     1,
+			Status:            types.DispatchStatus(record.Status),
+			DispatchID:        record.ID,
+			DispatchSalt:      record.Salt,
+			TraceToken:        record.TraceToken,
+			Response:          response,
+			ResponseTruncated: record.Truncated,
+			Metadata: &types.DispatchMetadata{
+				Engine:    record.Engine,
+				Model:     record.Model,
+				Role:      record.Role,
+				SessionID: record.SessionID,
+				Tokens:    &types.TokenUsage{},
+			},
+			Activity:   &types.DispatchActivity{},
+			DurationMS: record.DurationMs,
+		}
+		if err := dispatch.WritePersistentResult(spec, result, response, record.StartedAt, record.EndedAt); err != nil {
+			t.Fatalf("WritePersistentResult: %v", err)
 		}
 	}
 }
 
-func testStoreRecord(id, status string) store.DispatchRecord {
+func testStoreRecord(id, status string) dispatch.DispatchRecord {
 	artifactDir, err := recovery.DefaultArtifactDir(id)
 	if err != nil {
 		panic(err)
 	}
 
-	return store.DispatchRecord{
+	return dispatch.DispatchRecord{
 		ID:            id,
 		Salt:          "quick-newt-zero",
 		TraceToken:    "AGENT_MUX_GO_" + id,

@@ -1,9 +1,7 @@
 package recovery
 
 import (
-	"encoding/json"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,66 +32,17 @@ func DefaultArtifactDir(dispatchID string) (string, error) {
 }
 
 func RegisterDispatch(dispatchID, artifactDir string) error {
-	return writeControlRecord(ControlRecord{
+	return registerDispatchMeta(&types.DispatchSpec{
 		DispatchID:  dispatchID,
-		ArtifactDir: artifactDir,
+		ArtifactDir: strings.TrimSpace(artifactDir),
 	})
 }
 
 func RegisterDispatchSpec(spec *types.DispatchSpec) error {
 	if spec == nil {
-		return fmt.Errorf("missing dispatch spec for control-path registration")
+		return fmt.Errorf("missing dispatch spec for registration")
 	}
-	dispatch.EnsureTraceability(spec)
-	return writeControlRecord(ControlRecord{
-		DispatchID:   spec.DispatchID,
-		ArtifactDir:  spec.ArtifactDir,
-		DispatchSalt: spec.Salt,
-		TraceToken:   spec.TraceToken,
-	})
-}
-
-func writeControlRecord(record ControlRecord) error {
-	dispatchID, err := validateDispatchID(record.DispatchID)
-	if err != nil {
-		return err
-	}
-	artifactDir := strings.TrimSpace(record.ArtifactDir)
-	record.DispatchID = dispatchID
-	record.ArtifactDir = artifactDir
-	artifactDir = strings.TrimSpace(artifactDir)
-	if artifactDir == "" {
-		return fmt.Errorf("missing artifact dir for dispatch %q", dispatchID)
-	}
-
-	artifactDirAbs, err := filepath.Abs(artifactDir)
-	if err != nil {
-		return fmt.Errorf("resolve artifact dir %q: %w", artifactDir, err)
-	}
-	controlRoot := currentControlRoot()
-	if err := os.MkdirAll(controlRoot, 0o700); err != nil {
-		return fmt.Errorf("create control root: %w", err)
-	}
-
-	record.ArtifactDir = filepath.Clean(artifactDirAbs)
-	data, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal control record: %w", err)
-	}
-
-	path, err := controlRecordPathE(controlRoot, dispatchID)
-	if err != nil {
-		return err
-	}
-	tmpPath := path + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0o644); err != nil {
-		return fmt.Errorf("write control record: %w", err)
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		_ = os.Remove(tmpPath)
-		return fmt.Errorf("install control record: %w", err)
-	}
-	return nil
+	return registerDispatchMeta(spec)
 }
 
 func ResolveArtifactDir(dispatchID string) (string, error) {
@@ -102,28 +51,13 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 		return "", err
 	}
 
-	currentRoot := currentArtifactRoot()
-	currentControlPath, err := controlRecordPathE(currentControlRoot(), dispatchID)
-	if err != nil {
-		return "", err
-	}
-	legacyControlPath, err := controlRecordPathE(legacyControlRoot(), dispatchID)
-	if err != nil {
-		return "", err
+	if meta, err := dispatch.ReadPersistentMeta(dispatchID); err == nil {
+		if artifactDir := strings.TrimSpace(meta.ArtifactDir); artifactDir != "" {
+			return filepath.Clean(artifactDir), nil
+		}
 	}
 
-	if dir, found, err := resolveArtifactDirFromControlRecord(currentControlPath); err != nil {
-		return "", err
-	} else if found {
-		return dir, nil
-	}
-	if dir, found, err := resolveArtifactDirFromControlRecord(legacyControlPath); err != nil {
-		return "", err
-	} else if found {
-		return dir, nil
-	}
-
-	currentDir, err := artifactDirPath(currentRoot, dispatchID)
+	currentDir, err := artifactDirPath(currentArtifactRoot(), dispatchID)
 	if err != nil {
 		return "", err
 	}
@@ -143,48 +77,20 @@ func ResolveArtifactDir(dispatchID string) (string, error) {
 		return "", fmt.Errorf("stat legacy artifact directory %q: %w", legacyDir, err)
 	}
 
-	return "", fmt.Errorf(
-		"no artifact directory found for dispatch %q via control paths %q and %q or artifact paths %q and %q",
-		dispatchID,
-		currentControlPath,
-		legacyControlPath,
-		currentDir,
-		legacyDir,
-	)
+	return "", fmt.Errorf("no artifact directory found for dispatch %q", dispatchID)
 }
 
 func ResolveControlRecord(ref string) (*ControlRecord, error) {
-	ref, err := validateDispatchID(ref)
-	if err != nil {
+	record, err := dispatch.FindDispatchRecordByRef(ref)
+	if err != nil || record == nil {
 		return nil, err
 	}
-
-	if record, found, err := resolveControlRecordByDispatchID(currentControlRoot(), ref); err != nil {
-		return nil, err
-	} else if found {
-		return record, nil
-	}
-	if record, found, err := resolveControlRecordByDispatchID(legacyControlRoot(), ref); err != nil {
-		return nil, err
-	} else if found {
-		return record, nil
-	}
-
-	var match *ControlRecord
-	for _, root := range []string{currentControlRoot(), legacyControlRoot()} {
-		record, err := resolveControlRecordByScan(root, ref)
-		if err != nil {
-			return nil, err
-		}
-		if record == nil {
-			continue
-		}
-		if match != nil && match.DispatchID != record.DispatchID {
-			return nil, fmt.Errorf("multiple dispatches match reference %q", ref)
-		}
-		match = record
-	}
-	return match, nil
+	return &ControlRecord{
+		DispatchID:   record.ID,
+		ArtifactDir:  record.ArtifactDir,
+		DispatchSalt: record.Salt,
+		TraceToken:   record.TraceToken,
+	}, nil
 }
 
 func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
@@ -196,7 +102,7 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no artifact directory found for dispatch %q at %s. Previous dispatch may not have run or used a custom --artifact-dir.", dispatchID, dir)
+			return nil, fmt.Errorf("no artifact directory found for dispatch %q at %s", dispatchID, dir)
 		}
 		return nil, fmt.Errorf("stat artifact directory %q: %w", dir, err)
 	}
@@ -204,20 +110,28 @@ func RecoverDispatch(dispatchID string) (*RecoveryContext, error) {
 		return nil, fmt.Errorf("artifact path %q is not a directory", dir)
 	}
 
-	metaPath := filepath.Join(dir, "_dispatch_meta.json")
-	data, err := os.ReadFile(metaPath)
+	meta, err := dispatch.ReadDispatchMeta(dir)
 	if err != nil {
-		return nil, fmt.Errorf("read dispatch meta %q: %w", metaPath, err)
-	}
-
-	var meta dispatch.DispatchMeta
-	if err := json.Unmarshal(data, &meta); err != nil {
-		return nil, fmt.Errorf("parse dispatch meta %q: %w", metaPath, err)
+		if persistentMeta, persistentErr := dispatch.ReadPersistentMeta(dispatchID); persistentErr == nil {
+			meta = &dispatch.DispatchMeta{
+				DispatchID:   persistentMeta.DispatchID,
+				DispatchSalt: persistentMeta.DispatchSalt,
+				TraceToken:   persistentMeta.TraceToken,
+				SessionID:    persistentMeta.SessionID,
+				StartedAt:    persistentMeta.StartedAt,
+				Engine:       persistentMeta.Engine,
+				Model:        persistentMeta.Model,
+				Role:         persistentMeta.Role,
+				Cwd:          persistentMeta.Cwd,
+			}
+		} else {
+			return nil, fmt.Errorf("read dispatch meta for %q: %w", dispatchID, err)
+		}
 	}
 
 	return &RecoveryContext{
 		DispatchID:   dispatchID,
-		OriginalMeta: &meta,
+		OriginalMeta: meta,
 		Artifacts:    dispatch.ScanArtifacts(dir),
 		ArtifactDir:  dir,
 	}, nil
@@ -227,33 +141,13 @@ func currentArtifactRoot() string {
 	return sanitize.SecureArtifactRoot()
 }
 
-func currentControlRoot() string {
-	return filepath.Join(currentArtifactRoot(), "control")
-}
-
-func legacyControlRoot() string {
-	return filepath.Join(legacyArtifactRoot, "control")
-}
-
 func ControlRecordPath(dispatchID string) string {
-	path, err := controlRecordPathE(currentControlRoot(), dispatchID)
+	dir, err := dispatch.DispatchDir(strings.TrimSpace(dispatchID))
 	if err != nil {
-		return filepath.Join(currentControlRoot(), url.PathEscape(strings.TrimSpace(dispatchID))+".json")
+		root := dispatch.DispatchesDir()
+		return filepath.Join(root, strings.TrimSpace(dispatchID), "meta.json")
 	}
-	return path
-}
-
-func controlRecordPathE(root, dispatchID string) (string, error) {
-	dispatchID, err := validateDispatchID(dispatchID)
-	if err != nil {
-		return "", err
-	}
-
-	path, err := sanitize.SafeJoinPath(root, url.PathEscape(dispatchID)+".json")
-	if err != nil {
-		return "", fmt.Errorf("build control record path for dispatch %q: %w", dispatchID, err)
-	}
-	return path, nil
+	return filepath.Join(dir, "meta.json")
 }
 
 func artifactDirPath(root, dispatchID string) (string, error) {
@@ -269,88 +163,6 @@ func artifactDirPath(root, dispatchID string) (string, error) {
 	return path, nil
 }
 
-func resolveArtifactDirFromControlRecord(recordPath string) (string, bool, error) {
-	data, err := os.ReadFile(recordPath)
-	if err == nil {
-		var record ControlRecord
-		if err := json.Unmarshal(data, &record); err != nil {
-			return "", true, fmt.Errorf("parse control record %q: %w", recordPath, err)
-		}
-		if strings.TrimSpace(record.ArtifactDir) == "" {
-			return "", true, fmt.Errorf("control record %q is missing artifact_dir", recordPath)
-		}
-		return filepath.Clean(record.ArtifactDir), true, nil
-	}
-	if os.IsNotExist(err) {
-		return "", false, nil
-	}
-	return "", false, fmt.Errorf("read control record %q: %w", recordPath, err)
-}
-
-func resolveControlRecordByDispatchID(root, dispatchID string) (*ControlRecord, bool, error) {
-	recordPath, err := controlRecordPathE(root, dispatchID)
-	if err != nil {
-		return nil, false, err
-	}
-	record, found, err := readControlRecord(recordPath)
-	if err != nil || !found {
-		return nil, found, err
-	}
-	return record, true, nil
-}
-
-func resolveControlRecordByScan(root, ref string) (*ControlRecord, error) {
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read control root %q: %w", root, err)
-	}
-
-	var match *ControlRecord
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
-			continue
-		}
-		record, found, err := readControlRecord(filepath.Join(root, entry.Name()))
-		if err != nil {
-			return nil, err
-		}
-		if !found || !matchesControlRecordRef(record, ref) {
-			continue
-		}
-		if match != nil && match.DispatchID != record.DispatchID {
-			return nil, fmt.Errorf("multiple dispatches match reference %q", ref)
-		}
-		match = record
-	}
-	return match, nil
-}
-
-func readControlRecord(path string) (*ControlRecord, bool, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, false, nil
-		}
-		return nil, false, fmt.Errorf("read control record %q: %w", path, err)
-	}
-
-	var record ControlRecord
-	if err := json.Unmarshal(data, &record); err != nil {
-		return nil, false, fmt.Errorf("parse control record %q: %w", path, err)
-	}
-	return &record, true, nil
-}
-
-func matchesControlRecordRef(record *ControlRecord, ref string) bool {
-	if record == nil {
-		return false
-	}
-	return strings.HasPrefix(strings.TrimSpace(record.DispatchID), ref) || strings.TrimSpace(record.TraceToken) == ref
-}
-
 func validateDispatchID(dispatchID string) (string, error) {
 	dispatchID = strings.TrimSpace(dispatchID)
 	if dispatchID == "" {
@@ -360,6 +172,24 @@ func validateDispatchID(dispatchID string) (string, error) {
 		return "", fmt.Errorf("invalid dispatch ID %q: %w", dispatchID, err)
 	}
 	return dispatchID, nil
+}
+
+func registerDispatchMeta(spec *types.DispatchSpec) error {
+	if spec == nil {
+		return fmt.Errorf("missing dispatch spec")
+	}
+	dispatch.EnsureTraceability(spec)
+	artifactDir := strings.TrimSpace(spec.ArtifactDir)
+	if artifactDir == "" {
+		return fmt.Errorf("missing artifact dir for dispatch %q", spec.DispatchID)
+	}
+	artifactDirAbs, err := filepath.Abs(artifactDir)
+	if err != nil {
+		return fmt.Errorf("resolve artifact dir %q: %w", artifactDir, err)
+	}
+	specCopy := *spec
+	specCopy.ArtifactDir = filepath.Clean(artifactDirAbs)
+	return dispatch.WritePersistentMeta(&specCopy)
 }
 
 func BuildRecoveryPrompt(ctx *RecoveryContext, additionalInstruction string) string {

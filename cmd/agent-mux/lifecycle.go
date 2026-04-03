@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -19,7 +18,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
-	"github.com/buildoak/agent-mux/internal/store"
 )
 
 const listDefaultLimit = 20
@@ -58,7 +56,7 @@ func runListCommand(args []string, stdout io.Writer) int {
 		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid engine %q: want codex, claude, or gemini", engineFilter), "")
 	}
 
-	records, err := store.ListRecords("", 0)
+	records, err := dispatch.ListDispatchRecords(0)
 	if err != nil {
 		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("list dispatch records: %v", err), "")
 	}
@@ -103,12 +101,10 @@ func runStatusCommand(args []string, stdout io.Writer) int {
 	}
 	record := resolved.Record
 
-	// If no store record exists, try reading live status from artifact dir.
-	if record == nil {
+	if record == nil || strings.TrimSpace(record.Status) == "" {
 		return statusFromLiveDispatch(resolved, jsonOutput, stdout)
 	}
 
-	// Dispatch is in the store (completed/failed/timed_out).
 	if jsonOutput {
 		writeCompactJSON(stdout, record)
 		return 0
@@ -187,9 +183,17 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		return emitLifecycleError(stdout, 1, "not_found", err.Error(), "Use `agent-mux list` to find a durable dispatch ID.")
 	}
 	record := resolved.Record
+	dispatchID := resolved.DispatchID
+	if record != nil && strings.TrimSpace(record.ID) != "" {
+		dispatchID = record.ID
+	}
 
-	// If no record found, dispatch may still be running.
-	if record == nil {
+	persistedResult, persistedErr := dispatch.ReadPersistentResult(dispatchID)
+	if persistedErr != nil && !os.IsNotExist(persistedErr) {
+		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("read result for dispatch %q: %v", dispatchID, persistedErr), "")
+	}
+
+	if persistedResult == nil {
 		artifactDir := resolved.ArtifactDir
 		liveStatus, statusErr := dispatch.ReadStatusJSON(artifactDir)
 		if statusErr == nil && (liveStatus.State == "running" || liveStatus.State == "initializing") {
@@ -203,14 +207,8 @@ func runResultCommand(args []string, stdout io.Writer) int {
 				})
 				return 1
 			}
-			// Block: poll status.json until dispatch completes.
 			return pollUntilDone(resolved, jsonOutput, showArtifacts, stdout)
 		}
-	}
-
-	dispatchID := resolved.DispatchID
-	if record != nil && strings.TrimSpace(record.ID) != "" {
-		dispatchID = record.ID
 	}
 
 	if showArtifacts {
@@ -245,12 +243,10 @@ func runResultCommand(args []string, stdout io.Writer) int {
 		return 0
 	}
 
-	response, err := store.ReadResult("", dispatchID)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("read result for dispatch %q: %v", dispatchID, err), "")
-		}
-
+	response := ""
+	if persistedResult != nil {
+		response = persistedResult.Response
+	} else {
 		fallbackPath, fallbackErr := legacyFullOutputPath(dispatchID)
 		if fallbackErr != nil {
 			return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid dispatch_id %q: %v", dispatchID, fallbackErr), "")
@@ -302,12 +298,12 @@ func emitLifecycleError(stdout io.Writer, exitCode int, code, message, suggestio
 	return exitCode
 }
 
-func filterRecordsByStatus(records []store.DispatchRecord, status string) []store.DispatchRecord {
+func filterRecordsByStatus(records []dispatch.DispatchRecord, status string) []dispatch.DispatchRecord {
 	if strings.TrimSpace(status) == "" {
-		return append([]store.DispatchRecord(nil), records...)
+		return append([]dispatch.DispatchRecord(nil), records...)
 	}
 
-	filtered := make([]store.DispatchRecord, 0, len(records))
+	filtered := make([]dispatch.DispatchRecord, 0, len(records))
 	for _, record := range records {
 		if record.Status == status {
 			filtered = append(filtered, record)
@@ -316,11 +312,11 @@ func filterRecordsByStatus(records []store.DispatchRecord, status string) []stor
 	return filtered
 }
 
-func tailRecords(records []store.DispatchRecord, limit int) []store.DispatchRecord {
+func tailRecords(records []dispatch.DispatchRecord, limit int) []dispatch.DispatchRecord {
 	if limit <= 0 || limit >= len(records) {
 		return records
 	}
-	return records[len(records)-limit:]
+	return records[:limit]
 }
 
 func isValidDispatchStatus(status string) bool {
@@ -332,7 +328,7 @@ func isValidDispatchStatus(status string) bool {
 	}
 }
 
-func writeRecordTable(w io.Writer, records []store.DispatchRecord) {
+func writeRecordTable(w io.Writer, records []dispatch.DispatchRecord) {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(tw, "ID\tSALT\tSTATUS\tENGINE\tMODEL\tDURATION\tCWD")
 	for _, record := range records {
@@ -422,11 +418,11 @@ func legacyFullOutputPath(dispatchID string) (string, error) {
 
 // --- B1: engine filter ---
 
-func filterRecordsByEngine(records []store.DispatchRecord, engine string) []store.DispatchRecord {
+func filterRecordsByEngine(records []dispatch.DispatchRecord, engine string) []dispatch.DispatchRecord {
 	if strings.TrimSpace(engine) == "" {
 		return records
 	}
-	filtered := make([]store.DispatchRecord, 0, len(records))
+	filtered := make([]dispatch.DispatchRecord, 0, len(records))
 	for _, record := range records {
 		if record.Engine == engine {
 			filtered = append(filtered, record)
@@ -476,8 +472,11 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 
 	dispatchID := record.ID
 
-	// Read result text.
-	response, _ := store.ReadResult("", dispatchID)
+	persistedResult, _ := dispatch.ReadPersistentResult(dispatchID)
+	response := ""
+	if persistedResult != nil {
+		response = persistedResult.Response
+	}
 
 	// Resolve artifact directory and list contents.
 	artifactDir := record.ArtifactDir
@@ -550,177 +549,40 @@ func runInspectCommand(args []string, stdout io.Writer) int {
 	return 0
 }
 
-// --- B4: gc subcommand ---
-
-func runGCCommand(args []string, stdout io.Writer) int {
-	var flagOutput bytes.Buffer
-	fs := flag.NewFlagSet("agent-mux gc", flag.ContinueOnError)
-	fs.SetOutput(&flagOutput)
-
-	olderThan := ""
-	dryRun := false
-	fs.StringVar(&olderThan, "older-than", "", "Delete dispatches older than this duration (e.g., 7d, 24h)")
-	fs.BoolVar(&dryRun, "dry-run", false, "List what would be deleted without actually deleting")
-
-	if err := fs.Parse(normalizeArgs(args)); err != nil {
-		return handleLifecycleParseError(stdout, &flagOutput, err)
-	}
-	if len(fs.Args()) != 0 {
-		return emitLifecycleError(stdout, 2, "invalid_args", "gc does not accept positional arguments", "Use --older-than and --dry-run flags.")
-	}
-
-	olderThan = strings.TrimSpace(olderThan)
-	if olderThan == "" {
-		return emitLifecycleError(stdout, 2, "invalid_args", "--older-than is required", "Example: agent-mux gc --older-than 7d")
-	}
-
-	dur, err := parseDuration(olderThan)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "invalid_input", fmt.Sprintf("invalid duration %q: %v", olderThan, err), "Supported formats: Nd (days), Nh (hours). Example: 7d, 24h")
-	}
-
-	cutoff := time.Now().UTC().Add(-dur)
-
-	records, err := store.ListRecords("", 0)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("list dispatch records: %v", err), "")
-	}
-
-	var keep []store.DispatchRecord
-	var remove []store.DispatchRecord
-	for _, record := range records {
-		started, parseErr := time.Parse(time.RFC3339, record.StartedAt)
-		if parseErr != nil {
-			keep = append(keep, record)
-			continue
-		}
-		if started.Before(cutoff) {
-			remove = append(remove, record)
-		} else {
-			keep = append(keep, record)
-		}
-	}
-
-	if len(remove) == 0 {
-		writeCompactJSON(stdout, map[string]any{
-			"kind":    "gc",
-			"removed": 0,
-			"message": fmt.Sprintf("No dispatches older than %s found.", olderThan),
-		})
-		return 0
-	}
-
-	if dryRun {
-		writeCompactJSON(stdout, map[string]any{
-			"kind":         "gc_dry_run",
-			"would_remove": len(remove),
-			"dispatches":   gcRecordSummaries(remove),
-		})
-		return 0
-	}
-
-	// Delete result files and artifact directories for removed records.
-	storePath := store.DefaultStorePath()
-	for _, record := range remove {
-		if strings.TrimSpace(record.ID) != "" && strings.TrimSpace(storePath) != "" {
-			resultPath := filepath.Join(storePath, "results", record.ID+".md")
-			_ = os.Remove(resultPath)
-		}
-		if strings.TrimSpace(record.ArtifactDir) != "" {
-			_ = os.RemoveAll(record.ArtifactDir)
-		}
-	}
-
-	// Rewrite dispatches.jsonl with only the kept records.
-	if err := store.RewriteRecords("", keep); err != nil {
-		return emitLifecycleError(stdout, 1, "store_error", fmt.Sprintf("rewrite dispatch index: %v", err), "")
-	}
-
-	writeCompactJSON(stdout, map[string]any{
-		"kind":    "gc",
-		"removed": len(remove),
-		"kept":    len(keep),
-		"cutoff":  cutoff.Format(time.RFC3339),
-	})
-	return 0
-}
-
-func gcRecordSummaries(records []store.DispatchRecord) []map[string]string {
-	out := make([]map[string]string, 0, len(records))
-	for _, r := range records {
-		out = append(out, map[string]string{
-			"id":      shortDispatchID(r.ID),
-			"started": r.StartedAt,
-			"engine":  dashIfEmpty(r.Engine),
-			"status":  dashIfEmpty(r.Status),
-		})
-	}
-	return out
-}
-
-func parseDuration(s string) (time.Duration, error) {
-	s = strings.TrimSpace(s)
-	if len(s) < 2 {
-		return 0, fmt.Errorf("too short")
-	}
-	unit := s[len(s)-1]
-	numStr := s[:len(s)-1]
-	n, err := strconv.Atoi(numStr)
-	if err != nil {
-		return 0, fmt.Errorf("invalid number %q", numStr)
-	}
-	if n <= 0 {
-		return 0, fmt.Errorf("duration must be positive")
-	}
-	switch unit {
-	case 'd', 'D':
-		return time.Duration(n) * 24 * time.Hour, nil
-	case 'h', 'H':
-		return time.Duration(n) * time.Hour, nil
-	default:
-		return 0, fmt.Errorf("unsupported unit %q: want d (days) or h (hours)", string(unit))
-	}
-}
-
 // pollUntilDone polls status.json every 1s until the dispatch reaches a
-// terminal state, then reads and returns the result from the store.
+// terminal state, then reads and returns the result from the dispatch dir.
 func pollUntilDone(resolved *dispatchRefResolution, jsonOutput, showArtifacts bool, stdout io.Writer) int {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for range ticker.C {
-		// Check if a store record appeared (dispatch finished and persisted).
-		record, _ := store.FindRecordByRef("", resolved.InputRef)
+		record, _ := dispatch.FindDispatchRecordByRef(resolved.InputRef)
 		if record != nil {
-			// Dispatch completed. Delegate to normal result display.
-			return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
+			if strings.TrimSpace(record.Status) != "" {
+				return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
+			}
 		}
 
-		// Check live status.
 		liveStatus, err := dispatch.ReadStatusJSON(resolved.ArtifactDir)
 		if err != nil {
 			continue
 		}
 		switch liveStatus.State {
 		case "completed", "failed", "timed_out", "orphaned":
-			// Terminal state reached. Try store once more.
-			record, _ = store.FindRecordByRef("", resolved.InputRef)
-			if record != nil {
+			record, _ = dispatch.FindDispatchRecordByRef(resolved.InputRef)
+			if record != nil && strings.TrimSpace(record.Status) != "" {
 				return showResult(record.ID, record, jsonOutput, showArtifacts, stdout)
 			}
 			liveStatus.DispatchID = firstNonEmptyString(strings.TrimSpace(liveStatus.DispatchID), resolved.DispatchID)
 			liveStatus.SessionID = firstNonEmptyString(strings.TrimSpace(liveStatus.SessionID), sessionIDFromArtifacts(resolved.ArtifactDir))
-			// No store record but terminal state — return status.
 			writeCompactJSON(stdout, liveStatus)
 			return 0
 		}
-		// Still running — keep polling.
 	}
 	return 1
 }
 
-// showResult returns the result for a completed dispatch (shared by result and wait).
-func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, showArtifacts bool, stdout io.Writer) int {
+func showResult(dispatchID string, record *dispatch.DispatchRecord, jsonOutput, showArtifacts bool, stdout io.Writer) int {
 	if showArtifacts {
 		artifactDir := ""
 		if record != nil && strings.TrimSpace(record.ArtifactDir) != "" {
@@ -754,7 +616,7 @@ func showResult(dispatchID string, record *store.DispatchRecord, jsonOutput, sho
 		return 0
 	}
 
-	response, err := store.ReadResult("", dispatchID)
+	response, err := dispatch.ReadResult(dispatchID)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return emitLifecycleError(stdout, 1, "not_found", fmt.Sprintf("no stored result found for dispatch %q", dispatchID), "")
@@ -844,8 +706,8 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 
 	for range ticker.C {
 		// Check store first.
-		record, _ = store.FindRecordByRef("", resolved.InputRef)
-		if record != nil {
+		record, _ = dispatch.FindDispatchRecordByRef(resolved.InputRef)
+		if record != nil && strings.TrimSpace(record.Status) != "" {
 			return showResult(record.ID, record, jsonOutput, false, stdout)
 		}
 
@@ -857,9 +719,8 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 
 		switch liveStatus.State {
 		case "completed", "failed", "timed_out":
-			// Terminal. Try store one more time.
-			record, _ = store.FindRecordByRef("", resolved.InputRef)
-			if record != nil {
+			record, _ = dispatch.FindDispatchRecordByRef(resolved.InputRef)
+			if record != nil && strings.TrimSpace(record.Status) != "" {
 				return showResult(record.ID, record, jsonOutput, false, stdout)
 			}
 			liveStatus.DispatchID = firstNonEmptyString(strings.TrimSpace(liveStatus.DispatchID), resolved.DispatchID)
@@ -883,8 +744,7 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 // meta, or the events log (in that order of priority). This closes B-7:
 // machine consumers can distinguish completed/failed/killed/timeout without
 // parsing free-form logs.
-func enrichResultStatus(result map[string]any, record *store.DispatchRecord, dispatchID string) {
-	// 1. Store record is the most authoritative source.
+func enrichResultStatus(result map[string]any, record *dispatch.DispatchRecord, dispatchID string) {
 	if record != nil && strings.TrimSpace(record.Status) != "" {
 		result["status"] = record.Status
 		if strings.TrimSpace(record.SessionID) != "" {

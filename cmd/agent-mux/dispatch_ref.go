@@ -4,17 +4,17 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/recovery"
 	"github.com/buildoak/agent-mux/internal/sanitize"
-	"github.com/buildoak/agent-mux/internal/store"
 )
 
 type dispatchRefResolution struct {
-	InputRef   string
-	DispatchID string
-	TraceToken string
+	InputRef    string
+	DispatchID  string
+	TraceToken  string
 	ArtifactDir string
-	Record     *store.DispatchRecord
+	Record      *dispatch.DispatchRecord
 }
 
 func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
@@ -23,7 +23,7 @@ func resolveDispatchReference(ref string) (*dispatchRefResolution, error) {
 		return nil, err
 	}
 
-	record, err := store.FindRecordByRef("", ref)
+	record, err := dispatch.FindDispatchRecordByRef(ref)
 	if err != nil {
 		return nil, err
 	}

@@ -143,11 +143,14 @@ func UpdateDispatchSessionID(artifactDir string, sessionID string) error {
 		return fmt.Errorf("unmarshal meta: %w", err)
 	}
 	if meta.SessionID == sessionID {
-		return nil
+		return UpdatePersistentMetaSessionID(meta.DispatchID, sessionID)
 	}
 
 	meta.SessionID = sessionID
-	return writeMetaFile(path, &meta)
+	if err := writeMetaFile(path, &meta); err != nil {
+		return err
+	}
+	return UpdatePersistentMetaSessionID(meta.DispatchID, sessionID)
 }
 
 func ReadDispatchMeta(artifactDir string) (*DispatchMeta, error) {

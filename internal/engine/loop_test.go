@@ -19,7 +19,6 @@ import (
 	"github.com/buildoak/agent-mux/internal/event"
 	"github.com/buildoak/agent-mux/internal/fifo"
 	"github.com/buildoak/agent-mux/internal/inbox"
-	"github.com/buildoak/agent-mux/internal/store"
 	"github.com/buildoak/agent-mux/internal/types"
 )
 
@@ -265,7 +264,7 @@ func TestLoopEnginePersistsCompletedDispatchToStore(t *testing.T) {
 		t.Fatalf("status = %q, want completed", result.Status)
 	}
 
-	record, err := store.FindRecord("", spec.DispatchID)
+	record, err := dispatch.FindDispatchRecordByRef(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("FindRecord: %v", err)
 	}
@@ -285,7 +284,7 @@ func TestLoopEnginePersistsCompletedDispatchToStore(t *testing.T) {
 		t.Fatalf("timestamps = %#v, want started_at and ended_at", record)
 	}
 
-	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
@@ -310,7 +309,7 @@ func TestLoopEnginePersistsFailedDispatchToStore(t *testing.T) {
 		t.Fatalf("status = %q, want failed", result.Status)
 	}
 
-	record, err := store.FindRecord("", spec.DispatchID)
+	record, err := dispatch.FindDispatchRecordByRef(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("FindRecord: %v", err)
 	}
@@ -321,7 +320,7 @@ func TestLoopEnginePersistsFailedDispatchToStore(t *testing.T) {
 		t.Fatalf("status = %q, want failed", record.Status)
 	}
 
-	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
@@ -972,7 +971,7 @@ func TestFinalizeCompletedEmitsResponseTruncatedAndStoresFullResponse(t *testing
 	if !strings.Contains(string(eventsData), "\"type\":\"response_truncated\"") {
 		t.Fatalf("events.jsonl missing response_truncated event:\n%s", string(eventsData))
 	}
-	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
@@ -1005,7 +1004,7 @@ func TestFinalizeTimedOutEmitsResponseTruncatedAndStoresFullResponse(t *testing.
 	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
 		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
 	}
-	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
@@ -1037,7 +1036,7 @@ func TestFinalizeFailedEmitsResponseTruncatedAndStoresFullResponse(t *testing.T)
 	if !strings.Contains(stream.String(), "\"type\":\"response_truncated\"") {
 		t.Fatalf("stderr stream missing response_truncated event:\n%s", stream.String())
 	}
-	storedResponse, err := store.ReadResult("", spec.DispatchID)
+	storedResponse, err := dispatch.ReadResult(spec.DispatchID)
 	if err != nil {
 		t.Fatalf("ReadResult: %v", err)
 	}
@@ -1476,8 +1475,8 @@ func TestFM9FailedDispatchPreservesPartialResponse(t *testing.T) {
 		t.Fatalf("response = %q, want 'partial work done' (FM-9: partial response should be preserved)", result.Response)
 	}
 
-	// Also verify the response was persisted to the store.
-	storedResponse, readErr := store.ReadResult("", spec.DispatchID)
+	// Also verify the response was persisted to the dispatch dir.
+	storedResponse, readErr := dispatch.ReadResult(spec.DispatchID)
 	if readErr != nil {
 		t.Fatalf("ReadResult: %v", readErr)
 	}

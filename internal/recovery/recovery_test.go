@@ -1,7 +1,6 @@
 package recovery
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,33 +24,30 @@ func TestRecoverDispatch_NotFound(t *testing.T) {
 }
 
 func TestRecoverDispatch_ValidDir(t *testing.T) {
-	dispatchID := "valid-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
-	dir, err := DefaultArtifactDir(dispatchID)
-	if err != nil {
-		t.Fatalf("DefaultArtifactDir: %v", err)
-	}
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(dir)
-	})
+	t.Setenv("HOME", t.TempDir())
 
-	meta := `{
-  "dispatch_id": "` + dispatchID + `",
-  "dispatch_salt": "salt",
-  "started_at": "2026-03-26T00:00:00Z",
-  "engine": "codex",
-  "model": "gpt-5.4",
-  "prompt_hash": "sha256:deadbeef",
-  "cwd": "/tmp",
-  "status": "failed"
-}`
-	if err := os.WriteFile(filepath.Join(dir, "_dispatch_meta.json"), []byte(meta), 0644); err != nil {
-		t.Fatalf("write meta: %v", err)
+	dispatchID := "valid-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
+	artifactDir := t.TempDir()
+	spec := &types.DispatchSpec{
+		DispatchID:  dispatchID,
+		Salt:        "salt",
+		TraceToken:  "AGENT_MUX_GO_" + dispatchID,
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Role:        "worker",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		Prompt:      "recover test",
 	}
-	artifactPath := filepath.Join(dir, "notes.txt")
-	if err := os.WriteFile(artifactPath, []byte("artifact"), 0644); err != nil {
+
+	if err := dispatch.WriteDispatchMeta(artifactDir, spec); err != nil {
+		t.Fatalf("WriteDispatchMeta: %v", err)
+	}
+	if err := dispatch.WritePersistentMeta(spec); err != nil {
+		t.Fatalf("WritePersistentMeta: %v", err)
+	}
+	artifactPath := filepath.Join(artifactDir, "notes.txt")
+	if err := os.WriteFile(artifactPath, []byte("artifact"), 0o644); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}
 
@@ -62,95 +58,64 @@ func TestRecoverDispatch_ValidDir(t *testing.T) {
 	if ctx.DispatchID != dispatchID {
 		t.Fatalf("DispatchID = %q, want %q", ctx.DispatchID, dispatchID)
 	}
-	if ctx.ArtifactDir != dir {
-		t.Fatalf("ArtifactDir = %q, want %q", ctx.ArtifactDir, dir)
+	if ctx.ArtifactDir != artifactDir {
+		t.Fatalf("ArtifactDir = %q, want %q", ctx.ArtifactDir, artifactDir)
 	}
 	if ctx.OriginalMeta == nil {
 		t.Fatal("OriginalMeta is nil")
 	}
-	if len(ctx.Artifacts) == 0 {
-		t.Fatal("expected artifacts")
-	}
-	if ctx.Artifacts[0] != artifactPath {
-		t.Fatalf("Artifacts[0] = %q, want %q", ctx.Artifacts[0], artifactPath)
+	if len(ctx.Artifacts) != 1 || ctx.Artifacts[0] != artifactPath {
+		t.Fatalf("Artifacts = %#v, want %q", ctx.Artifacts, artifactPath)
 	}
 }
 
-func TestResolveArtifactDirUsesAbsoluteRegisteredPath(t *testing.T) {
-	startDir := t.TempDir()
-	otherDir := t.TempDir()
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("getwd: %v", err)
-	}
-	if err := os.Chdir(startDir); err != nil {
-		t.Fatalf("chdir startDir: %v", err)
-	}
-	defer func() {
-		if err := os.Chdir(prevWD); err != nil {
-			t.Fatalf("restore cwd: %v", err)
-		}
-	}()
+func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 
-	dispatchID := "relative-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
-	relativeDir := filepath.Join("artifacts", "custom")
-	absoluteDir := filepath.Join(startDir, relativeDir)
-	if err := os.MkdirAll(absoluteDir, 0755); err != nil {
-		t.Fatalf("mkdir absoluteDir: %v", err)
-	}
-	if err := RegisterDispatch(dispatchID, relativeDir); err != nil {
-		t.Fatalf("RegisterDispatch: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Remove(ControlRecordPath(dispatchID))
-	})
-
-	if err := os.Chdir(otherDir); err != nil {
-		t.Fatalf("chdir otherDir: %v", err)
-	}
-
-	resolved, err := ResolveArtifactDir(dispatchID)
-	if err != nil {
-		t.Fatalf("ResolveArtifactDir: %v", err)
-	}
-	resolvedReal, err := filepath.EvalSymlinks(resolved)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(resolved): %v", err)
-	}
-	absoluteReal, err := filepath.EvalSymlinks(absoluteDir)
-	if err != nil {
-		t.Fatalf("EvalSymlinks(absoluteDir): %v", err)
-	}
-	if resolvedReal != absoluteReal {
-		t.Fatalf("resolved = %q (%q), want %q (%q)", resolved, resolvedReal, absoluteDir, absoluteReal)
-	}
-}
-
-func TestResolveArtifactDirFallsBackToLegacyControlRecord(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
-
-	dispatchID := "legacy-control-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
 	artifactDir := t.TempDir()
-	recordPath, err := controlRecordPathE(legacyControlRoot(), dispatchID)
-	if err != nil {
-		t.Fatalf("controlRecordPathE(legacy): %v", err)
+	spec := &types.DispatchSpec{
+		DispatchID:  "traceable-dispatch",
+		Salt:        "coral-fox-nine",
+		TraceToken:  "AGENT_MUX_GO_traceable-dispatch",
+		ArtifactDir: artifactDir,
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Prompt:      "traceability",
 	}
-	if err := os.MkdirAll(filepath.Dir(recordPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll(control dir): %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Remove(recordPath)
-	})
 
-	data, err := json.MarshalIndent(ControlRecord{
+	if err := RegisterDispatchSpec(spec); err != nil {
+		t.Fatalf("RegisterDispatchSpec: %v", err)
+	}
+
+	meta, err := dispatch.ReadPersistentMeta(spec.DispatchID)
+	if err != nil {
+		t.Fatalf("ReadPersistentMeta: %v", err)
+	}
+	if meta.DispatchSalt != spec.Salt {
+		t.Fatalf("dispatch_salt = %q, want %q", meta.DispatchSalt, spec.Salt)
+	}
+	if meta.TraceToken != spec.TraceToken {
+		t.Fatalf("trace_token = %q, want %q", meta.TraceToken, spec.TraceToken)
+	}
+	if meta.ArtifactDir != artifactDir {
+		t.Fatalf("artifact_dir = %q, want %q", meta.ArtifactDir, artifactDir)
+	}
+}
+
+func TestResolveArtifactDirUsesPersistentMeta(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	dispatchID := "persisted-artifact"
+	artifactDir := t.TempDir()
+	spec := &types.DispatchSpec{
 		DispatchID:  dispatchID,
 		ArtifactDir: artifactDir,
-	}, "", "  ")
-	if err != nil {
-		t.Fatalf("MarshalIndent(controlRecord): %v", err)
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Prompt:      "artifact dir",
 	}
-	if err := os.WriteFile(recordPath, data, 0o644); err != nil {
-		t.Fatalf("WriteFile(controlRecord): %v", err)
+	if err := RegisterDispatchSpec(spec); err != nil {
+		t.Fatalf("RegisterDispatchSpec: %v", err)
 	}
 
 	resolved, err := ResolveArtifactDir(dispatchID)
@@ -162,61 +127,29 @@ func TestResolveArtifactDirFallsBackToLegacyControlRecord(t *testing.T) {
 	}
 }
 
-func TestResolveArtifactDirFallsBackToLegacyDefaultArtifactDir(t *testing.T) {
-	t.Setenv("XDG_RUNTIME_DIR", t.TempDir())
+func TestResolveControlRecordUsesDispatchDirMeta(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
 
-	dispatchID := "legacy-dir-" + strings.ReplaceAll(time.Now().UTC().Format(time.RFC3339Nano), ":", "-")
-	legacyDir, err := artifactDirPath(legacyArtifactRoot, dispatchID)
-	if err != nil {
-		t.Fatalf("artifactDirPath(legacy): %v", err)
-	}
-	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll(legacyDir): %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(legacyDir)
-	})
-
-	resolved, err := ResolveArtifactDir(dispatchID)
-	if err != nil {
-		t.Fatalf("ResolveArtifactDir: %v", err)
-	}
-	if resolved != legacyDir {
-		t.Fatalf("resolved = %q, want %q", resolved, legacyDir)
-	}
-}
-
-func TestRegisterDispatchSpecPersistsTraceability(t *testing.T) {
-	artifactDir := t.TempDir()
+	dispatchID := "control-ref"
 	spec := &types.DispatchSpec{
-		DispatchID:  "traceable-dispatch",
-		Salt:        "coral-fox-nine",
-		TraceToken:  "AGENT_MUX_GO_traceable-dispatch",
-		ArtifactDir: artifactDir,
+		DispatchID:  dispatchID,
+		Salt:        "quick-newt-zero",
+		TraceToken:  "AGENT_MUX_GO_control-ref",
+		ArtifactDir: t.TempDir(),
+		Engine:      "codex",
+		Model:       "gpt-5.4",
+		Prompt:      "control record",
 	}
-
 	if err := RegisterDispatchSpec(spec); err != nil {
 		t.Fatalf("RegisterDispatchSpec: %v", err)
 	}
-	t.Cleanup(func() {
-		_ = os.Remove(ControlRecordPath(spec.DispatchID))
-	})
 
-	data, err := os.ReadFile(ControlRecordPath(spec.DispatchID))
+	record, err := ResolveControlRecord(dispatchID[:8])
 	if err != nil {
-		t.Fatalf("ReadFile(controlRecord): %v", err)
+		t.Fatalf("ResolveControlRecord: %v", err)
 	}
-	var record struct {
-		DispatchID   string `json:"dispatch_id"`
-		ArtifactDir  string `json:"artifact_dir"`
-		DispatchSalt string `json:"dispatch_salt"`
-		TraceToken   string `json:"trace_token"`
-	}
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatalf("Unmarshal(controlRecord): %v", err)
-	}
-	if record.DispatchSalt != spec.Salt {
-		t.Fatalf("dispatch_salt = %q, want %q", record.DispatchSalt, spec.Salt)
+	if record.DispatchID != dispatchID {
+		t.Fatalf("dispatch_id = %q, want %q", record.DispatchID, dispatchID)
 	}
 	if record.TraceToken != spec.TraceToken {
 		t.Fatalf("trace_token = %q, want %q", record.TraceToken, spec.TraceToken)
@@ -251,70 +184,5 @@ func TestBuildRecoveryPrompt_ContainsDispatchID(t *testing.T) {
 	prompt := BuildRecoveryPrompt(ctx, "")
 	if !strings.Contains(prompt, "abc123") {
 		t.Fatalf("prompt missing dispatch ID: %q", prompt)
-	}
-}
-
-func TestControlRecordPathRejectsSymlinks(t *testing.T) {
-	// Create a temp dir and a symlink inside it that points elsewhere.
-	root := t.TempDir()
-	target := t.TempDir()
-
-	// Create a symlink at root/link -> target.
-	linkPath := filepath.Join(root, "link")
-	if err := os.Symlink(target, linkPath); err != nil {
-		t.Fatalf("Symlink: %v", err)
-	}
-
-	// writeControlRecord validates path chains via sanitize.SafeJoinPath,
-	// which calls checkPathChainNoSymlinks. The dispatch ID itself cannot
-	// contain slashes, so we verify the root path (artifact_dir) rejects
-	// symlink components by attempting RegisterDispatch with a symlinked dir.
-	dispatchID := "symlink-test-dispatch"
-	symlinkArtifactDir := filepath.Join(linkPath, "artifacts", dispatchID)
-	if err := os.MkdirAll(symlinkArtifactDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-
-	// RegisterDispatch should succeed (it stores the absolute resolved path),
-	// but the underlying control record should have an absolute path, not follow symlinks.
-	err := RegisterDispatch(dispatchID, symlinkArtifactDir)
-	if err != nil {
-		// This is acceptable — the function may reject symlink paths.
-		t.Cleanup(func() { _ = os.Remove(ControlRecordPath(dispatchID)) })
-		return
-	}
-	t.Cleanup(func() { _ = os.Remove(ControlRecordPath(dispatchID)) })
-
-	// Verify the stored path is cleaned/absolute.
-	data, err := os.ReadFile(ControlRecordPath(dispatchID))
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	var record struct {
-		ArtifactDir string `json:"artifact_dir"`
-	}
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if record.ArtifactDir == "" {
-		t.Fatal("artifact_dir is empty in control record")
-	}
-}
-
-func TestBuildRecoveryPrompt_ContainsArtifacts(t *testing.T) {
-	ctx := &RecoveryContext{
-		DispatchID: "abc123",
-		OriginalMeta: &dispatch.DispatchMeta{
-			Status:     "timed_out",
-			PromptHash: "sha256:1234",
-		},
-		Artifacts: []string{"/tmp/agent-mux/abc123/out.txt", "/tmp/agent-mux/abc123/log.txt"},
-	}
-
-	prompt := BuildRecoveryPrompt(ctx, "")
-	for _, artifact := range ctx.Artifacts {
-		if !strings.Contains(prompt, artifact) {
-			t.Fatalf("prompt missing artifact %q: %q", artifact, prompt)
-		}
 	}
 }
