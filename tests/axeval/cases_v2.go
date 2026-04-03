@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 // buildCasesV2 returns the v2 ax-eval test cases using the given fixture cwd.
 func buildCasesV2(cwd string) []TestCase {
+	hookConfigPath := mustWriteHookBlockingConfig(cwd)
+
 	return []TestCase{
 		{
 			Name:         "output-contract-schema",
@@ -121,21 +124,41 @@ func buildCasesV2(cwd string) []TestCase {
 			Evaluate: compose(
 				statusIs("completed"),
 				func(r Result) Verdict {
-					events, err := parseNDJSONObjects(r.RawStderr, "stderr")
+					raw, err := stdoutJSONObject(r)
 					if err != nil {
-						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: could not parse stderr events for flat role resolution: %v", err)}
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
-					for _, evt := range events {
-						if eventType, _ := jsonStringField(evt, "type"); eventType != "dispatch_start" {
-							continue
-						}
-						model, _ := jsonStringField(evt, "model")
-						if model == "gpt-5.4-mini" {
-							return Verdict{Pass: true, Score: 1.0, Reason: "dispatch_start model=gpt-5.4-mini"}
-						}
-						return Verdict{Pass: true, Score: 0.5, Reason: fmt.Sprintf("TODO: flat role resolution not reflected in dispatch_start model (got %q)", model)}
+					metadata, err := jsonObjectField(raw, "metadata")
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
 					}
-					return Verdict{Pass: true, Score: 0.5, Reason: "TODO: dispatch_start event missing from stderr; flat role resolution could not be verified"}
+					if err := requireExactStringField(metadata, "model", "gpt-5.4-mini"); err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("metadata: %v", err)}
+					}
+					return Verdict{Pass: true, Score: 1.0, Reason: "metadata.model=gpt-5.4-mini"}
+				},
+			),
+		},
+		{
+			Name:         "hook-script-blocking",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "What is 2+2?",
+			CWD:          cwd,
+			TimeoutSec:   60,
+			MaxWallClock: 2 * time.Minute,
+			SkipSkills:   true,
+			ExtraFlags:   []string{"--config", hookConfigPath},
+			Evaluate: compose(
+				statusIs("failed"),
+				errorCodeIs("prompt_denied"),
+				func(r Result) Verdict {
+					if !strings.Contains(r.ErrorMessage, "blocked by test hook") {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("error.message=%q, want hook denial reason", r.ErrorMessage)}
+					}
+					return Verdict{Pass: true, Score: 1.0, Reason: "hook denial reason preserved"}
 				},
 			),
 		},
@@ -224,6 +247,66 @@ func buildCasesV2(cwd string) []TestCase {
 			),
 		},
 		{
+			Name:         "dispatch-ref-json",
+			Category:     CatCorrectness,
+			Engine:       "codex",
+			Model:        "gpt-5.4-mini",
+			Effort:       "high",
+			Prompt:       "What is 2+2? Answer with just the number.",
+			CWD:          cwd,
+			TimeoutSec:   120,
+			MaxWallClock: 3 * time.Minute,
+			SkipSkills:   true,
+			Evaluate: compose(
+				statusIs("completed"),
+				func(r Result) Verdict {
+					raw, err := stdoutJSONObject(r)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: err.Error()}
+					}
+					resultDispatchID, ok := jsonStringField(raw, "dispatch_id")
+					if !ok || strings.TrimSpace(resultDispatchID) == "" {
+						return Verdict{Pass: false, Score: 0.0, Reason: "dispatch_id missing from result"}
+					}
+
+					refPath := filepath.Join(r.ArtifactDir, "_dispatch_ref.json")
+					data, err := os.ReadFile(refPath)
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("read _dispatch_ref.json: %v", err)}
+					}
+
+					var ref map[string]any
+					if err := json.Unmarshal(data, &ref); err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("parse _dispatch_ref.json: %v", err)}
+					}
+
+					dispatchID, ok := jsonStringField(ref, "dispatch_id")
+					if !ok || strings.TrimSpace(dispatchID) == "" {
+						return Verdict{Pass: false, Score: 0.0, Reason: "dispatch_id missing from _dispatch_ref.json"}
+					}
+					if dispatchID != resultDispatchID {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("dispatch_id=%q in _dispatch_ref.json, want %q", dispatchID, resultDispatchID)}
+					}
+
+					storeDir, ok := jsonStringField(ref, "store_dir")
+					if !ok || strings.TrimSpace(storeDir) == "" {
+						return Verdict{Pass: false, Score: 0.0, Reason: "store_dir missing from _dispatch_ref.json"}
+					}
+
+					homeDir, err := os.UserHomeDir()
+					if err != nil {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("resolve home dir: %v", err)}
+					}
+					expectedDir := filepath.Join(homeDir, ".agent-mux", "dispatches", dispatchID)
+					if filepath.Clean(storeDir) != expectedDir {
+						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("store_dir=%q, want %q", storeDir, expectedDir)}
+					}
+
+					return Verdict{Pass: true, Score: 1.0, Reason: "_dispatch_ref.json has dispatch_id and store_dir"}
+				},
+			),
+		},
+		{
 			Name:         "handoff-summary-extraction",
 			Category:     CatCorrectness,
 			Engine:       "codex",
@@ -243,7 +326,7 @@ func buildCasesV2(cwd string) []TestCase {
 					}
 					handoffSummary, ok := jsonStringField(raw, "handoff_summary")
 					if !ok || strings.TrimSpace(handoffSummary) == "" {
-						return Verdict{Pass: true, Score: 0.5, Reason: "TODO: handoff_summary not extracted (field missing in output)"}
+						return Verdict{Pass: false, Score: 0.0, Reason: "handoff_summary missing or empty"}
 					}
 					if !strings.Contains(handoffSummary, "HANDOFF_CANARY_4488") {
 						return Verdict{Pass: false, Score: 0.0, Reason: fmt.Sprintf("handoff_summary=%q, want HANDOFF_CANARY_4488", handoffSummary)}
@@ -253,4 +336,22 @@ func buildCasesV2(cwd string) []TestCase {
 			),
 		},
 	}
+}
+
+func mustWriteHookBlockingConfig(cwd string) string {
+	scriptPath := filepath.Join(cwd, ".agent-mux", "hooks", "deny-all.sh")
+	info, err := os.Stat(scriptPath)
+	if err != nil {
+		panic(fmt.Sprintf("stat hook blocking script %q: %v", scriptPath, err))
+	}
+	if info.Mode()&0o111 == 0 {
+		panic(fmt.Sprintf("hook blocking script %q is not executable", scriptPath))
+	}
+
+	configPath := filepath.Join(cwd, ".agent-mux", "hook-script-blocking.toml")
+	config := fmt.Sprintf("[hooks]\npre_dispatch = [%q]\n", scriptPath)
+	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
+		panic(fmt.Sprintf("write hook blocking config %q: %v", configPath, err))
+	}
+	return configPath
 }

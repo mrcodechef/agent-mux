@@ -10,9 +10,9 @@
 | Model selection | yes | bad-model | — |
 | Effort tiers → timeout bucketing | yes | effort-tiers-low, TestEffortTiers | — |
 | Role resolution | partial | role-dispatch (verifies completion, not system prompt delivery) | System prompt silently dropped |
-| Variant resolution | **no** | — | Variant override silently ignored |
+| Variant resolution | REMOVED | — | Variants are dead; roles are flat definitions |
 | Profile resolution | **no** | — | Profile engine/model/timeout overrides broken |
-| response_max_chars truncation | REMOVED | — | `--response-max-chars` flag no longer exists; truncation removed by design |
+| full_output_path / response_max_chars truncation | REMOVED | — | `--response-max-chars` flag no longer exists; truncation removed by design. `full_output_path` remains a dead schema-compat stub |
 | --stdin JSON dispatch | **no** | — | Entire programmatic dispatch path broken |
 | --preview dry-run | **no** | — | Coordinators can't preview before dispatch |
 | **Worker Interaction** | | | |
@@ -25,6 +25,7 @@
 | **Output Handling** | | | |
 | Response capture | yes | all completion cases | — |
 | Artifact dir creation + meta.json (persistence) | partial | artifact-dir-metadata | Checks `~/.agent-mux/dispatches/<id>/meta.json` for dispatch_id, engine, model, started_at |
+| _dispatch_ref.json presence | partial | artifact-dir-metadata | Checks durable `meta.json` but not artifact-dir `_dispatch_ref.json` pointer specifically |
 | result.json (persistence) | **no** | — | `~/.agent-mux/dispatches/<id>/result.json` not yet asserted |
 | full_output.md fallback (via result cmd) | **no** | — | response-truncation case removed; no replacement yet. scout-role-completion now tests only role completion, not spill behavior |
 | handoff_summary extraction | **no** | — | Pipeline handoffs get garbage |
@@ -58,7 +59,7 @@
 | **Recovery** | | | |
 | --recover with prior context | yes | TestRecoveryRedispatch | — |
 | **Config** | | | |
-| Config loading + merge | **no** | — | CWD config silently ignored |
+| Config loading + merge | **no** | — | Global → project 2-file config merge silently broken |
 | config introspection (roles, skills, models) | **no** | — | Agents can't discover capabilities |
 | **Error Handling** | | | |
 | engine_not_found | yes | bad-engine | — |
@@ -90,17 +91,11 @@
 - `statusIs("completed")`
 - `responseContains("ROLE_SYSPROMPT_CANARY_9931")`
 
-### M3: `variant-resolution`
-**Tests:** --variant overrides engine/model/effort from base role
-**Setup:** Fixture role `variant-test` with base `model: gpt-5.4` and variant `mini` with `model: gpt-5.4-mini`
-**Prompt:** `"What is 2+2?"`
-**ExtraFlags:** `["-R=variant-test", "--variant=mini"]`
-**Evaluators:**
-- `statusIs("completed")`
-- Parse dispatch_start event from stderr: assert `model == "gpt-5.4-mini"`
+### M3: `variant-resolution` — REMOVED
+**Status:** Removed. Variants are dead; roles are flat definitions. The `variant-test-mini` fixture is now just a regular role named `variant-test-mini`.
 
 ### M4: `response-truncation` — REMOVED
-**Status:** Removed. `--response-max-chars` flag and truncation logic no longer exist in the codebase (removed in 3.1.0). The case was asserting presence of truncation; the correct behavior is that truncation does not happen. No replacement case added yet.
+**Status:** Removed. `--response-max-chars` flag and truncation logic no longer exist in the codebase (removed in 3.1.0). `full_output_path` remains a dead compatibility stub, not an active spill-path contract. The case was asserting presence of truncation; the correct behavior is that truncation does not happen. No replacement case added yet.
 
 ### M5: `artifact-dir-metadata`
 **Tests:** `meta.json` written under `~/.agent-mux/dispatches/<id>/`, events.jsonl exists, status.json written
@@ -185,7 +180,7 @@
 | **P1** | M4: response-truncation | REMOVED — truncation feature removed from codebase | — |
 | **P1** | M12: async-host-pid-status-json | Catches async observability failures — orphan detection depends on this | Med |
 | **P1** | M6: stdin-json-dispatch | Catches the entire programmatic dispatch path (every coordinator uses this) | Low |
-| **P2** | M3: variant-resolution | Catches variant override silently ignored | Low |
+| **P2** | M3: variant-resolution | REMOVED — variants are dead; `variant-test-mini` is a regular role | — |
 | **P2** | M11: handoff-summary-extraction | Catches summary extraction bugs in `handoff_summary` extraction | Low |
 | **P2** | M13: skill-scripts-on-path | Catches skill scripts silently unavailable | Low |
 | **P2** | M7: preview-dry-run | Catches preview command broken — coordinators use this for pre-flight | Low |

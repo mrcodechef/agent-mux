@@ -139,11 +139,11 @@ You are given the output-contract documentation for agent-mux.
 Answer these specific questions precisely:
 
 1. What is the difference between "response" and "handoff_summary"?
-2. What is "dispatch_id" and what format does it use?
-3. Where are dispatch results persisted on disk after a dispatch completes?
-4. What three values can "status" take and what does each mean?
-5. What is the difference between "partial" and "recoverable"?
-6. In the error object, what is the difference between "hint" and "example"?
+2. What is "full_output_path" and is it still actively used?
+3. What three values can "status" take and what does each mean?
+4. What is the difference between "partial" and "recoverable"?
+5. In the error object, what is the difference between "hint" and "example"?
+6. Where does agent-mux persist dispatch data on disk and what files does it write there?
 
 ## Output Contract Documentation
 {output-contract.md content}
@@ -151,11 +151,11 @@ Answer these specific questions precisely:
 
 **Checklist (6 items):**
 - [ ] `response` is the full worker response text; `handoff_summary` is extracted from `## Summary`/`## Handoff` headers or is a shortened version. They are NOT the same field
-- [ ] `dispatch_id` is a ULID — the sole canonical dispatch identity. No `trace_token` or `dispatch_salt` fields exist
-- [ ] Persistence: `meta.json` written to `~/.agent-mux/dispatches/<dispatch_id>/meta.json` at start; `result.json` written at end. No `_dispatch_meta.json` in the artifact dir
+- [ ] `full_output_path` is a schema-compat stub; always null (response truncation was removed). It is NOT the active artifact or persistence contract
 - [ ] `status` values: `completed` (clean exit), `timed_out` (timeout), `failed` (validation/startup/adapter error)
 - [ ] `partial` and `recoverable` appear on `timed_out` runs; partial means work is incomplete, recoverable means it can be resumed
 - [ ] `hint` is guidance text; `example` is a corrective command example. No `suggestion` field exists
+- [ ] Persistence: `meta.json` at `~/.agent-mux/dispatches/<dispatch_id>/meta.json` at start; `result.json` at end. Artifact dir gets `_dispatch_ref.json` pointer. No `_dispatch_meta.json`
 
 ---
 

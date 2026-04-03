@@ -283,10 +283,11 @@ Score 1.0 if all 8 met. Deduct 0.125 per missed item.`
 Answer these specific questions precisely:
 
 1. What is the difference between "response" and "handoff_summary"?
-2. When is "full_output_path" set vs null?
+2. What is "full_output_path" and is it still actively used?
 3. What three values can "status" take and what does each mean?
 4. What is the difference between "partial" and "recoverable"?
 5. In the error object, what is the difference between "hint" and "example"?
+6. Where does agent-mux persist dispatch data on disk and what files does it write there?
 
 ## Output Contract Documentation
 %s`, contract)
@@ -308,8 +309,9 @@ Answer these specific questions precisely:
 3. status can be: completed (clean exit), timed_out (timeout), failed (validation/startup/adapter error).
 4. partial=true and recoverable=true appear on timed_out runs. partial means work is incomplete, recoverable means it can be resumed.
 5. hint is guidance text; example is the corrective command example.
+6. Persistence: meta.json at ~/.agent-mux/dispatches/<dispatch_id>/meta.json at start; result.json at end. Artifact dir gets _dispatch_ref.json pointer. No _dispatch_meta.json.
 
-Score 1.0 if all 5 answered correctly. Deduct 0.2 per wrong/missing answer. Hallucinations count as -0.2.`
+Score 1.0 if all 6 answered correctly. Deduct 0.1667 per wrong/missing answer. Hallucinations count as -0.2.`
 
 		verdict := axJudge(t, binaryPath, materials, checklist)
 		verdict.Tier = TierL0
