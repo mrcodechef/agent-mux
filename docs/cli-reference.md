@@ -25,42 +25,42 @@ These flags are registered in normal dispatch mode.
 
 | Flag | Short | Type | Default | Notes |
 | --- | --- | --- | --- | --- |
-| `--engine` | `-E` | string | from config | `codex`, `claude`, `gemini` |
-| `--role` | `-R` | string | empty | Role name |
-| `--profile` |  | string | empty | Profile name |
+| `--profile` | `-P` | string | empty | Profile name -- loads `~/.agent-mux/prompts/<name>.md` |
+| `--engine` | `-E` | string | from profile | `codex`, `claude`, `gemini` |
 | `--cwd` | `-C` | string | current dir | Working directory |
-| `--model` | `-m` | string | from config | Model override |
+| `--model` | `-m` | string | from profile | Model override |
 | `--effort` | `-e` | string | resolved later | `low`, `medium`, `high`, `xhigh` |
 | `--timeout` | `-t` | int | resolved later | Timeout seconds |
-| `--system-prompt` | `-s` | string | empty | Inline system prompt |
-| `--system-prompt-file` |  | string | empty | System prompt file |
-| `--prompt-file` |  | string | empty | Prompt file instead of positional prompt |
-| `--skill` |  | string[] | empty | Repeatable skill name |
-| `--context-file` |  | string | empty | Context file path |
-| `--artifact-dir` |  | string | auto | Runtime artifact directory |
-| `--recover` |  | string | empty | Previous dispatch ID to continue |
-| `--signal` |  | string | empty | Deliver a message to a running dispatch |
-| `--config` |  | string | empty | Config path override |
+| `--system-prompt` | `-s` | string | empty | Inline system prompt (overrides profile body) |
+| `--system-prompt-file` | | string | empty | System prompt file |
+| `--prompt-file` | | string | empty | Prompt file instead of positional prompt |
+| `--skill` | | string[] | empty | Repeatable skill name |
+| `--context-file` | | string | empty | Context file path |
+| `--artifact-dir` | | string | auto | Runtime artifact directory |
+| `--recover` | | string | empty | Previous dispatch ID to continue |
+| `--signal` | | string | empty | Deliver a message to a running dispatch |
 | `--full` | `-f` | bool | `true` | Full access mode |
-| `--no-full` |  | bool | `false` | Disable full access |
-| `--max-depth` |  | int | `2` | Recursive dispatch limit |
-| `--skip-skills` |  | bool | `false` | Skip skill injection |
-| `--stdin` |  | bool | `false` | Read dispatch JSON from stdin |
-| `--yes` |  | bool | `false` | Skip interactive confirmation |
-| `--version` |  | bool | `false` | Print version |
+| `--no-full` | | bool | `false` | Disable full access |
+| `--max-depth` | | int | `2` | Recursive dispatch limit |
+| `--skip-skills` | | bool | `false` | Skip skill injection |
+| `--stdin` | | bool | `false` | Read dispatch JSON from stdin |
+| `--yes` | | bool | `false` | Skip interactive confirmation |
+| `--version` | | bool | `false` | Print version |
 | `--verbose` | `-v` | bool | `false` | Raw harness lines plus events on stderr |
 | `--stream` | `-S` | bool | `false` | All structured events on stderr |
-| `--async` |  | bool | `false` | Ack-first async flow; does not daemonize |
+| `--async` | | bool | `false` | Ack-first async flow; does not daemonize |
+
+`-P` is the primary dispatch flag. It loads a profile from `~/.agent-mux/prompts/`, applying frontmatter defaults for engine, model, effort, timeout, and skills, and injecting the markdown body as the system prompt. CLI flags override any frontmatter value.
 
 ## Engine-Specific Flags
 
 | Flag | Short | Engine | Type | Default | Notes |
 | --- | --- | --- | --- | --- | --- |
-| `--sandbox` |  | Codex | string | `danger-full-access` | Sandbox mode |
+| `--sandbox` | | Codex | string | `danger-full-access` | Sandbox mode |
 | `--reasoning` | `-r` | Codex | string | `medium` | Reasoning effort |
-| `--add-dir` |  | Codex | string[] | empty | Repeatable writable directory |
-| `--permission-mode` |  | Claude/Gemini | string | empty | Adapter-specific permission or approval mode |
-| `--max-turns` |  | Claude | int | `0` | Maximum turns |
+| `--add-dir` | | Codex | string[] | empty | Repeatable writable directory |
+| `--permission-mode` | | Claude/Gemini | string | empty | Adapter-specific permission or approval mode |
+| `--max-turns` | | Claude | int | `0` | Maximum turns |
 
 ## `--stdin` Mode
 
@@ -68,12 +68,11 @@ When `--stdin` is enabled, the CLI uses a reduced flag set:
 
 | Flag | Short | Notes |
 | --- | --- | --- |
-| `--stdin` |  | Required to enter stdin mode |
+| `--stdin` | | Required to enter stdin mode |
 | `--yes` | `-y` | Skip confirmation |
 | `--verbose` | `-v` | Verbose stderr |
-| `--stream` |  | Stream structured events |
-| `--async` |  | Async ack-first execution |
-| `--config` |  | Config path override |
+| `--stream` | | Stream structured events |
+| `--async` | | Async ack-first execution |
 
 `--stdin` mode does not register the normal dispatch flag set. The dispatch payload itself carries the execution fields.
 
@@ -99,7 +98,6 @@ These keys map to `types.DispatchSpec`:
 
 ### Additional JSON Keys Consumed by `main.go`
 
-- `role`
 - `profile`
 - `coordinator`
 - `skills`
@@ -112,9 +110,42 @@ Defaults when omitted:
 - `cwd`: current working directory
 - `artifact_dir`: `dispatch.DefaultArtifactDir(dispatch_id) + "/"`
 - `full_access`: `true`
-- `grace_sec`: `60`
+- `grace_sec`: `timeout_sec / 2`
 
 `prompt` is required. `coordinator` is accepted as an alias for `profile`; conflicting values are rejected.
+
+## Examples
+
+**Profile-based dispatch:**
+
+```bash
+agent-mux -P=lifter -C /repo "Add retry logic to client.ts"
+```
+
+**Override profile defaults:**
+
+```bash
+agent-mux -P=lifter -m gpt-5.4-mini -t 300 -C /repo "Quick fix for off-by-one in parser.go"
+```
+
+**Async with profile:**
+
+```bash
+agent-mux -P=architect --async -C /repo "Design the cache invalidation strategy"
+```
+
+**Stdin dispatch with profile:**
+
+```bash
+printf '{"profile":"scout","prompt":"Find all TODO comments","cwd":"/repo"}' \
+  | agent-mux --stdin
+```
+
+**Minimal dispatch without a profile:**
+
+```bash
+agent-mux -E codex -C /repo "List all exported functions in internal/config/"
+```
 
 ## `preview`
 
@@ -132,26 +163,23 @@ agent-mux preview [dispatch flags] <prompt>
 - `warnings`
 - `confirmation_required`
 
-`result_metadata` currently contains `role`, `profile`, and `skills`.
+`result_metadata` currently contains `profile` and `skills`.
 
 ## `config`
 
 ```bash
-agent-mux config [--config <path>] [--cwd <dir>]
-agent-mux config --sources
-agent-mux config roles [--json]
-agent-mux config models [--json]
-agent-mux config skills [--json]
+agent-mux config [--cwd <dir>]
+agent-mux config prompts [--json]
+agent-mux config skills [--cwd <dir>] [--json]
 ```
 
 Implemented subcommands are exactly:
 
 - `config`
-- `config roles`
-- `config models`
+- `config prompts`
 - `config skills`
 
-`config roles` reports one entry per role. The current command does not emit a variant table.
+`config prompts` reports one entry per prompt file in `~/.agent-mux/prompts/`, including engine, model, effort, timeout, and description from frontmatter.
 
 ## Mode Detection
 
@@ -189,3 +217,4 @@ Implemented subcommands are exactly:
 - [async.md](./async.md) for `--async` semantics
 - [lifecycle.md](./lifecycle.md) for lifecycle behavior
 - [recovery.md](./recovery.md) for persistence and recovery
+- [config.md](./config.md) for profile discovery and frontmatter schema

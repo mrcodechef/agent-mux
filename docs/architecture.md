@@ -14,8 +14,23 @@ The principles below are already reflected in code. Each one has an implementati
 | Job done is holy | `internal/dispatch.EnsureArtifactDir` and `dispatch.RegisterDispatchSpec(...)` establish the artifact/control path before the harness starts, and `LoopEngine.Dispatch` persists dispatch refs before process spawn. |
 | Errors are steering signals | `internal/dispatch.ErrorCatalog` normalizes failures into codes, messages, suggestions, and retryability for the caller. |
 | Single-shot with curated context first | The default path is one `types.DispatchSpec` into one `engine.LoopEngine`. |
-| Simplest viable dispatch | CLI flags, stdin JSON, role overlays, and timeout buckets resolve into a single materialized spec before execution. The engine loop does not keep reinterpreting config at runtime. |
-| Config over code | `internal/config` owns merge semantics, role definitions, skill search paths, and timeout buckets; the binary stays generic. |
+| Prompt over config | Worker identity lives in `.md` files at `~/.agent-mux/prompts/` with YAML frontmatter defaults. No TOML, no merge chain, no role resolution. The binary is generic; the prompt is the worker. |
+| Simplest viable dispatch | CLI flags, frontmatter defaults, and timeout resolution produce a single materialized spec before execution. The engine loop does not reinterpret config at runtime. |
+
+## The Prompt-Driven Model
+
+agent-mux's configuration model is: **prompt files define worker identity, CLI flags override infrastructure, engines are interchangeable execution backends.**
+
+A prompt file at `~/.agent-mux/prompts/<name>.md` carries everything a worker needs to be itself:
+
+```text
+YAML frontmatter          ->  engine, model, effort, timeout, skills
+Markdown body             ->  system prompt (the worker's personality and instructions)
+```
+
+Resolution is a single pass: hardcoded defaults, then frontmatter overlay, then CLI/JSON overrides. No merge chain, no layered config files. The binary loads one prompt file and materializes one `DispatchSpec`.
+
+`config prompts` discovers all available profiles from `~/.agent-mux/prompts/` and surfaces their metadata for programmatic selection.
 
 ## Key Architecture Decisions
 
@@ -36,7 +51,7 @@ caller
   |
   v
 +------------------+
-| config resolver  |
+| prompt resolver  |
 | internal/config  |
 +------------------+
   |
@@ -71,7 +86,7 @@ codex binary      claude binary      gemini binary
 | Package | Owns |
 | --- | --- |
 | `cmd/agent-mux` | CLI commands, spec construction, stdin/async/recover/steer entry points |
-| `internal/config` | Config loading, merge semantics, role resolution, skill loading, timeout defaults |
+| `internal/config` | Profile loading, frontmatter parsing, skill discovery, timeout/liveness defaults |
 | `internal/types` | Shared contracts: `DispatchSpec`, `DispatchResult`, `HarnessEvent`, `HarnessAdapter` |
 | `internal/dispatch` | Artifact directory setup, persistent meta/result store, recovery helpers, live status I/O |
 | `internal/steer` | Unified steering delivery: `Delivery`, inbox helpers, FIFO helpers |
@@ -142,19 +157,8 @@ DispatchSpec input
 CLI or stdin decode
   |
   v
-config.LoadConfig(...)
-  |
-  v
 optional profile load
   `-> config.LoadProfile(...)
-  |
-  v
-optional role lookup
-  `-> config.ResolveRole(...)
-  |
-  v
-optional variant overlay
-  `-> resolveVariant(...)
   |
   v
 defaults application
@@ -162,7 +166,7 @@ defaults application
   |
   v
 timeout resolution
-  `-> config.TimeoutForEffort(...) + timeout.grace
+  `-> hardcoded default + proportional grace
   |
   v
 skill injection
@@ -175,10 +179,6 @@ context and recovery augmentation
   v
 hook prompt check
   `-> hooks.Evaluator.CheckPrompt(...)
-  |
-  v
-safety preamble injection
-  `-> hooks.Evaluator.PromptInjection()
   |
   v
 adapter selection
@@ -260,7 +260,7 @@ The engine loop handles four terminal outcomes:
 
 Each terminal path writes `result.json` to the durable store at `~/.agent-mux/dispatches/<dispatch_id>/` and then writes terminal `status.json` in the artifact directory, keeping artifact discovery on the result. The only difference is which `dispatch.Build*Result` constructor is used and what error payload, if any, is attached. Store records are written via tmp-file + fsync + rename before the terminal status event is emitted to prevent observers from reading a status ahead of a queryable record. `ReadDispatchMeta` still understands legacy `_dispatch_meta.json`, but current runs use `_dispatch_ref.json` plus the persistent store as the primary metadata path.
 
-After the waiter goroutine signals process exit (`streamDone`), the loop performs a second drain pass on the scanner channel. This catches `EventResponse` and other events that were emitted between the last scanner read and process exit — a narrow race on clean harness exits that previously caused the final response to be silently dropped.
+After the waiter goroutine signals process exit (`streamDone`), the loop performs a second drain pass on the scanner channel. This catches `EventResponse` and other events that were emitted between the last scanner read and process exit -- a narrow race on clean harness exits that previously caused the final response to be silently dropped.
 
 Soft timeout is not immediate process death. On soft timeout, the loop writes a wrap-up message into the inbox and opens a hard-timeout timer for the grace period. That allows the harness to summarize and flush artifacts before the process group is stopped.
 
@@ -269,7 +269,7 @@ Soft timeout is not immediate process death. On soft timeout, the loop writes a 
 Some package splits are structural rather than cosmetic:
 
 - `internal/config` resolves intent; it does not execute anything
-- `internal/engine` executes one run; it does not know TOML merge rules
+- `internal/engine` executes one run; it does not know frontmatter parsing
 - `internal/engine/adapter` normalizes engine-specific behavior; it does not own lifecycle
 - `internal/dispatch` owns traceability, persistent records, artifact resolution, recovery prompt construction, and live status; there is no separate `internal/recovery` package
 - `internal/steer` owns inbox and FIFO steering together; there are no separate `internal/inbox` or `internal/fifo` packages
@@ -280,8 +280,7 @@ This separation keeps new engine support, new config surfaces, and loop changes 
 
 - [Dispatch](./dispatch.md) for the `DispatchSpec` and `DispatchResult` contract
 - [Engines](./engines.md) for adapter behavior and per-harness differences
-- [Config](./config.md) for merge order, roles, variants, skills, and timeout buckets
-- [Pipelines](./pipelines.md) for `PipelineConfig`, fan-out, and handoff modes
+- [Config](./config.md) for frontmatter schema, resolution order, and profile discovery
 - [Recovery](./recovery.md) for control records, dispatch recovery, and continuation prompts
 - [Lifecycle](./lifecycle.md) for statuses, events, timeout escalation, and supervision states
 - [CLI Reference](./cli-reference.md) for commands, flags, and stdin mode

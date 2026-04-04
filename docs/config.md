@@ -1,341 +1,206 @@
 # Configuration
 
-agent-mux loads TOML config from a fixed set of locations and merges the files it finds on top of hardcoded defaults from `DefaultConfig()`. The source of truth for file discovery is `configPaths()` in `internal/config/config.go`.
+agent-mux configuration is prompt-driven. Worker identity, engine defaults, and dispatch parameters live in markdown files with YAML frontmatter at `~/.agent-mux/prompts/`. There is no TOML config, no per-project config, no merge chain. One global directory, one file per worker.
 
-## Config File Discovery
+## Prompt Files
 
-Implicit discovery checks exactly two paths, in this order:
+Each prompt file is a markdown document at `~/.agent-mux/prompts/<name>.md`:
 
-1. `~/.agent-mux/config.toml`
-2. `<cwd>/.agent-mux/config.toml`
+```markdown
+---
+engine: codex
+model: gpt-5.4
+effort: high
+timeout: 1800
+description: "Scoped implementation with built-in verification"
+---
 
-Rules:
+# Lifter
 
-- Project config overlays global config.
-- Missing files are skipped.
-- `cwd` is absolutized before project lookup.
+You are a lifter. You build what was specified, verify it works, and report back.
 
-If `--config <path>` is set, implicit discovery is skipped and that path becomes the sole config source:
+## How You Think
 
-- If `<path>` is a file, agent-mux loads that file.
-- If `<path>` is a directory, agent-mux tries `<path>/.agent-mux/config.toml` and then `<path>/config.toml`.
-
-## TOML Schema
-
-Supported top-level sections:
-
-```toml
-[defaults]
-[skills]
-[models]
-[liveness]
-[timeout]
-[hooks]
-[async]
-[roles.NAME]
+Read before you write. Understand the existing code, its conventions...
 ```
 
-Example:
+The YAML frontmatter sets dispatch defaults. The markdown body becomes the system prompt.
 
-```toml
-[defaults]
-engine = "codex"
-model = "gpt-5.4"
-effort = "high"
-sandbox = "danger-full-access"
-max_depth = 2
+## Frontmatter Schema
 
-[skills]
-search_paths = ["~/.claude/skills"]
-
-[models]
-codex = ["gpt-5.4", "gpt-5.4-mini"]
-claude = ["claude-sonnet-4-6"]
-
-[timeout]
-low = 120
-medium = 600
-high = 1800
-xhigh = 2700
-grace = 60
-
-[liveness]
-heartbeat_interval_sec = 15
-silence_warn_seconds = 90
-silence_kill_seconds = 180
-
-[hooks]
-pre_dispatch = ["./.agent-mux/hooks/pre-dispatch.sh"]
-on_event = ["./.agent-mux/hooks/on-event.sh"]
-event_deny_action = "warn"
-
-[async]
-poll_interval = "60s"
-
-[roles.scout]
-engine = "codex"
-model = "gpt-5.4-mini"
-effort = "low"
-timeout = 180
-skills = ["repo-map"]
-system_prompt_file = "prompts/scout.md"
-
-[roles.lifter-claude]
-engine = "claude"
-model = "claude-sonnet-4-6"
-effort = "high"
-timeout = 900
-system_prompt_file = "prompts/lifter.md"
-```
-
-### `[defaults]`
-
-`[defaults]` maps to `DefaultsConfig`:
-
-| Key | Type | Default | Notes |
+| Field | Type | Required | Notes |
 | --- | --- | --- | --- |
-| `engine` | string | `""` | Default engine |
-| `model` | string | `""` | Default model |
-| `effort` | string | `"high"` | Default effort |
-| `sandbox` | string | `"danger-full-access"` | Default sandbox mode |
-| `permission_mode` | string | `""` | Default permission mode |
-| `max_depth` | int | `2` | Default recursive dispatch depth |
+| `engine` | string | no | `codex`, `claude`, or `gemini` |
+| `model` | string | no | Model name for the engine |
+| `effort` | string | no | `low`, `medium`, `high`, `xhigh` |
+| `timeout` | int | no | Timeout in seconds; must be > 0 when set |
+| `description` | string | no | Human-readable purpose line for `config prompts` |
+| `skills` | string[] | no | Skill names to inject automatically |
 
-Defaults apply only when the resolved dispatch still leaves a field unset.
+All fields are optional. A prompt file with no frontmatter at all is valid -- the markdown body is used as the system prompt, and all dispatch parameters must come from CLI flags or JSON fields.
 
-### `[skills]`
+## Resolution Order
 
-`[skills]` maps to:
+CLI flags and JSON fields always win over frontmatter. Frontmatter wins over hardcoded defaults.
 
-```go
-type SkillsConfig struct {
-	SearchPaths []string `toml:"search_paths"`
+```text
+hardcoded defaults
+  |
+  v
+frontmatter (from prompt file)
+  |
+  v
+CLI flags / --stdin JSON fields
+```
+
+Concretely for each field:
+
+| Field | Hardcoded Default | Frontmatter | CLI / JSON |
+| --- | --- | --- | --- |
+| `engine` | *(none -- required)* | `engine:` | `--engine` / `-E` / `"engine"` |
+| `model` | *(none)* | `model:` | `--model` / `-m` / `"model"` |
+| `effort` | `high` | `effort:` | `--effort` / `-e` / `"effort"` |
+| `timeout` | `1800` | `timeout:` | `--timeout` / `-t` / `"timeout_sec"` |
+| `grace` | `timeout / 2` | *(not in frontmatter)* | `"grace_sec"` |
+| `max_depth` | `2` | *(not in frontmatter)* | `--max-depth` / `"max_depth"` |
+| `system_prompt` | *(none)* | markdown body | `--system-prompt` / `-s` |
+| `skills` | *(none)* | `skills:` | `--skill` / `"skills"` |
+
+Key behaviors:
+
+- **Engine is required.** If no engine is set after resolution, the dispatch fails with `invalid_args`.
+- **Frontmatter timeout must be positive.** A `timeout: 0` or negative value in frontmatter is a validation error.
+- **Grace period is proportional.** When not set explicitly, `grace_sec = timeout_sec / 2` (minimum 1).
+- **Skills merge.** Frontmatter skills are prepended; request skills follow. Duplicates are removed.
+- **System prompt from frontmatter is the default.** An explicit `--system-prompt` or `system_prompt` JSON field replaces it entirely.
+
+### `--stdin` Mode Resolution
+
+In `--stdin` mode, the same resolution applies but using JSON field presence instead of CLI flag tracking:
+
+```json
+{
+  "profile": "lifter",
+  "prompt": "Add retry logic to client.ts",
+  "cwd": "/repo",
+  "model": "gpt-5.4-mini"
 }
 ```
 
-`search_paths` is an additive list of extra skill roots. Config merge appends and deduplicates these paths, and `~` expansion is supported.
+Here `model` overrides the frontmatter value (`gpt-5.4`), while `engine`, `effort`, and `timeout` come from the lifter profile's frontmatter. `coordinator` is accepted as an alias for `profile`.
 
-### `[models]`
+## Profile Discovery
 
-`[models]` is `map[string][]string`, keyed by engine. Merge behavior is additive per engine: overlay entries append to the existing list and duplicates are removed in first-seen order.
+`agent-mux config prompts` discovers all `.md` files in `~/.agent-mux/prompts/` and displays their metadata:
 
-### `[liveness]`
+```bash
+$ agent-mux config prompts
+NAME              ENGINE  MODEL              EFFORT  TIMEOUT  DESCRIPTION
+architect         claude  claude-sonnet-4-6  high    900      System design and migration planning
+auditor           claude  claude-sonnet-4-6  high    900      Code review and correctness verification
+explorer          codex   gpt-5.4-mini       low     300      Broad codebase exploration and mapping
+grunt             codex   gpt-5.3-codex-spark low    120      Mechanical edits, renames, bulk changes
+lifter            codex   gpt-5.4            high    1800     Scoped implementation with verification
+researcher        claude  claude-sonnet-4-6  high    900      Deep analysis and synthesis
+scout             codex   gpt-5.4-mini       low     180      Quick read-only probe and status reads
+ticket-worker     codex   gpt-5.4-mini       medium  600      Ticket execution (standard)
+ticket-worker-heavy codex gpt-5.4            high    900      Ticket execution (complex)
+writer            claude  claude-sonnet-4-6  high    900      Documentation and writing
+```
 
-`[liveness]` maps to `LivenessConfig`:
+`agent-mux config prompts --json` emits a JSON array for programmatic use:
 
-| Key | Type | Default |
+```json
+[
+  {
+    "name": "lifter",
+    "path": "/Users/you/.agent-mux/prompts/lifter.md",
+    "source": "~/.agent-mux/prompts",
+    "engine": "codex",
+    "model": "gpt-5.4",
+    "effort": "high",
+    "timeout": 1800,
+    "description": "Scoped implementation with built-in verification"
+  }
+]
+```
+
+## Hardcoded Defaults
+
+When frontmatter and CLI leave a field unset, these hardcoded values apply:
+
+| Parameter | Default | Source |
 | --- | --- | --- |
-| `heartbeat_interval_sec` | int | `15` |
-| `silence_warn_seconds` | int | `90` |
-| `silence_kill_seconds` | int | `180` |
+| `effort` | `high` | hardcoded in `main.go` |
+| `timeout_sec` | `1800` | `config.DefaultTimeoutSec` |
+| `grace_sec` | `timeout_sec / 2` | proportional, minimum 1 |
+| `max_depth` | `2` | `config.MaxDepth()`, overridable via `AGENT_MUX_MAX_DEPTH` |
+| `permission_mode` | *(engine-specific)* | `config.PermissionMode()`, overridable via `AGENT_MUX_PERMISSION_MODE` |
 
-These values are copied into engine options when the dispatch did not already set them explicitly.
+### Liveness Defaults
 
-### `[timeout]`
+Liveness supervision uses hardcoded defaults overridable via environment variables:
 
-`[timeout]` maps to `TimeoutConfig`:
+| Parameter | Default | Env Override |
+| --- | --- | --- |
+| `heartbeat_interval_sec` | `15` | `AGENT_MUX_HEARTBEAT_INTERVAL_SEC` |
+| `silence_warn_seconds` | `90` | `AGENT_MUX_SILENCE_WARN_SECONDS` |
+| `silence_kill_seconds` | `180` | `AGENT_MUX_SILENCE_KILL_SECONDS` |
 
-| Key | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `low` | int | `120` | Used for `effort="low"` |
-| `medium` | int | `600` | Used for `effort="medium"` |
-| `high` | int | `1800` | Used for `effort="high"` and unknown efforts |
-| `xhigh` | int | `2700` | Used for `effort="xhigh"` |
-| `grace` | int | `60` | Post-timeout grace period |
+### Model Validation
 
-Explicitly configured timeout values must be greater than zero. That validation also applies to `roles.<name>.timeout`.
+Each engine has a fallback model allowlist used when no model list is configured:
 
-### `[hooks]`
+| Engine | Fallback models |
+| --- | --- |
+| `codex` | `gpt-5.4`, `gpt-5.4-mini`, `gpt-5.3-codex-spark`, `gpt-5.2-codex` |
+| `claude` | `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5` |
+| `gemini` | `gemini-2.5-flash`, `gemini-2.5-pro`, `gemini-3-flash-preview`, `gemini-3.1-pro-preview` |
 
-`[hooks]` maps to `HooksConfig` in `internal/hooks/hooks.go`:
+An unrecognized model produces a `model_not_found` error with fuzzy suggestions.
 
-```go
-type HooksConfig struct {
-	PreDispatch     []string `toml:"pre_dispatch"`
-	OnEvent         []string `toml:"on_event"`
-	EventDenyAction string   `toml:"event_deny_action"`
-}
-```
+## Hooks
 
-Example:
+Hooks are configured through `.agent-mux/hooks/` directories (project-local discovery) and operate on harness events. Hook scripts receive JSON on stdin and return exit codes to allow, block, or warn.
 
-```toml
-[hooks]
-pre_dispatch = ["./.agent-mux/hooks/pre-dispatch.sh"]
-on_event = ["./.agent-mux/hooks/on-event.sh"]
-event_deny_action = "kill"
-```
+| Script | Trigger |
+| --- | --- |
+| `pre-dispatch.sh` | Before harness launch |
+| `on-event.sh` | On each harness event |
 
-Rules:
+Exit codes: `0` = allow, `1` = block, `2` = warn.
 
-- Hooks are executable scripts referenced by path.
-- `pre_dispatch` scripts run before launch.
-- `on_event` scripts run for harness events.
-- Paths are trimmed, empty entries are ignored, and leading `~/` is expanded.
-- `event_deny_action` is normalized to `"warn"` or `"kill"`. Any value other than `"warn"` behaves as `"kill"`.
-
-Hook input:
-
-- Scripts receive JSON on `stdin`.
-- Pre-dispatch JSON has `phase`, `prompt`, and `system_prompt`.
-- Event JSON has `phase`, `text`, `command`, `tool`, and `file_path`.
+`event_deny_action` controls whether a denied event kills the dispatch or downgrades to a warning.
 
 Hook environment variables:
 
 - Pre-dispatch: `HOOK_PHASE`, `HOOK_PROMPT`, `HOOK_SYSTEM_PROMPT`
 - Event: `HOOK_PHASE`, `HOOK_COMMAND`, `HOOK_FILE_PATH`, `HOOK_TOOL`, `HOOK_TEXT`
 
-Exit codes from `runHook()`:
-
-- `0`: allow
-- `1`: block
-- `2`: warn
-
-Evaluator behavior:
-
-- Pre-dispatch hooks only block on exit `1`. Exit `2` is treated as a warning result internally but is not surfaced as a prompt warning.
-- Event hooks return `warn` on exit `2`.
-- Event hooks return `deny` on exit `1` unless `event_deny_action = "warn"`, in which case the result is downgraded to `warn`.
-- Non-exit failures default to allow.
-
-Hooks do not inject prompt policy text. `PromptInjection()` currently returns an empty string.
-
-### `[async]`
-
-`[async]` maps to:
-
-```go
-type AsyncConfig struct {
-	PollInterval string `toml:"poll_interval"`
-}
-```
-
-`poll_interval` is a Go duration string. `AsyncPollInterval()` falls back to `60s` when the value is empty, invalid, or shorter than `1s`.
-
-## Roles
-
-Roles are flat entries under `[roles]`. `ResolveRole()` does a direct lookup of `cfg.Roles[roleName]` and returns that record.
-
-Role names are just keys. Names such as `lifter-claude` or `grunt-spark` are separate role definitions.
-
-`agent-mux config roles` shows those flat role names exactly as stored in `cfg.Roles`.
-
-### Role Fields
-
-`[roles.<name>]` maps to:
-
-```go
-type RoleConfig struct {
-	Engine           string   `toml:"engine"`
-	Model            string   `toml:"model"`
-	Effort           string   `toml:"effort"`
-	Timeout          int      `toml:"timeout"`
-	Skills           []string `toml:"skills"`
-	SystemPromptFile string   `toml:"system_prompt_file"`
-	SourceDir        string   `toml:"-"`
-}
-```
-
-| Field | Type | Notes |
-| --- | --- | --- |
-| `engine` | string | Role engine |
-| `model` | string | Role model |
-| `effort` | string | Role effort |
-| `timeout` | int | Role timeout in seconds; must be `> 0` when set |
-| `skills` | `[]string` | Role skill list |
-| `system_prompt_file` | string | Relative path to a prompt file stored with the config |
-
-`system_prompt_file` behavior:
-
-- Absolute paths are rejected.
-- The file is resolved relative to the source directory of the config file that defined the role.
-- If the configured value has no directory component, agent-mux also tries `prompts/<filename>` under that source directory.
-
-Role skills and request skills are merged at dispatch time with deduplication. Request-supplied skills keep priority order, then role skills are appended.
-
-## Merge Semantics
-
-Config merge is field-wise and defined-wins:
-
-```go
-func merge[T comparable](dst *T, value T, defined bool) {
-	var zero T
-	if defined || value != zero {
-		*dst = value
-	}
-}
-```
-
-Meaning:
-
-- An explicitly defined overlay value wins, even when it is `""` or `0`.
-- An absent zero value does not clear the earlier value.
-- TOML metadata is used to tell the difference.
-
-Conflict rules:
-
-| Section or field | Merge behavior |
-| --- | --- |
-| Scalars in `[defaults]`, `[liveness]`, `[timeout]`, `[async]` | Last explicit definition wins |
-| `[skills].search_paths` | Append and deduplicate |
-| `[models].<engine>` | Append and deduplicate |
-| `[hooks].pre_dispatch`, `[hooks].on_event` | Append and deduplicate |
-| `[hooks].event_deny_action` | Last explicit definition wins |
-| New roles | Added by name |
-| Existing role scalars | Last explicit definition wins |
-| `roles.<name>.skills` | Replace the whole list when explicitly defined |
-
-## Profiles
-
-Profiles are loaded by `LoadProfile(name, cwd)` from markdown files only. Search order for `<name>.md` is:
-
-1. `<cwd>/.claude/agents/`
-2. `<cwd>/agents/`
-3. `<cwd>/.agent-mux/agents/`
-4. `~/.agent-mux/agents/`
-
-Recognized YAML frontmatter fields:
-
-- `engine`
-- `model`
-- `effort`
-- `skills`
-- `timeout`
-
-The markdown body becomes `CoordinatorSpec.SystemPrompt`. If `timeout` is explicitly present, it must be greater than zero.
-
-Profiles are markdown-only. Loading a profile reads the matched `<name>.md` file and its frontmatter.
-
-In `--stdin` mode, `coordinator` is accepted as an alias for `profile`.
-
 ## Skill Injection
 
 `LoadSkills()` resolves skill names in this order:
 
 1. `<cwd>/.claude/skills/<name>/SKILL.md`
-2. `<configDir>/.claude/skills/<name>/SKILL.md`, when `configDir != ""` and `configDir != cwd`
-3. Each configured `search_path` as `<search_path>/<name>/SKILL.md`
+2. Each configured search path as `<search_path>/<name>/SKILL.md`
 
-Behavior:
+First readable match wins. Loaded content is wrapped as `<skill name="NAME"> ... </skill>`. If the resolved skill directory contains `scripts/`, that path is added to the dispatch.
 
-- First readable match wins.
-- Duplicate requested skill names are removed by first occurrence.
-- Loaded content is wrapped as `<skill name="NAME"> ... </skill>`.
-- If the resolved skill directory contains `scripts/`, that directory is added to the dispatch path list.
-- Missing skills produce an error that includes the searched paths and discovered skill names.
+Skills from profile frontmatter are prepended to request skills. Duplicates are removed.
 
 ## Config Inspection Commands
 
-Useful commands:
-
 ```bash
-agent-mux config
-agent-mux config --sources
-agent-mux config roles
-agent-mux config roles --json
-agent-mux config models
-agent-mux config skills
-agent-mux config skills --json
+agent-mux config                    # summary of hardcoded defaults and env overrides
+agent-mux config prompts            # list all profiles with metadata
+agent-mux config prompts --json     # JSON array of profile catalog
+agent-mux config skills             # list discoverable skills
+agent-mux config skills --json      # JSON array of skills
 ```
 
-`agent-mux config roles` reports flat role names from `[roles]`. It does not expand or synthesize names from any overlay system.
+## Cross-References
+
+- [Dispatch](./dispatch.md) for the `DispatchSpec` and `DispatchResult` contract
+- [Engines](./engines.md) for adapter behavior and per-harness differences
+- [CLI Reference](./cli-reference.md) for commands, flags, and stdin mode
+- [Architecture](./architecture.md) for the system design and package map

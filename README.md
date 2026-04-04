@@ -1,14 +1,16 @@
 # agent-mux
 
-Cross-harness dispatch layer. One CLI, one JSON contract, any LLM engine.
+Cross-engine dispatch layer. One CLI, one JSON contract, any LLM engine.
 
-> **Go rewrite.** agent-mux was recently rewritten from TypeScript to Go — static binary, goroutine-based supervision, no runtime dependencies.
+> **Go rewrite.** agent-mux was recently rewritten from TypeScript to Go -- static binary, goroutine-based supervision, no runtime dependencies.
 > The TS version is preserved on the `agent-mux-ts` branch.
 > See [DOCS.md](DOCS.md) for the full technical reference.
 
 ## What It Does
 
-AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated — each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them: any LLM can dispatch work to any other LLM through one JSON contract and one config system. Flat roles and reusable TOML config turn good dispatch patterns into repeatable workflows.
+AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated -- each has its own CLI flags, event format, sandbox model, and session lifecycle. agent-mux connects them: any LLM can dispatch work to any other LLM through one JSON contract and prompt-driven worker identity.
+
+Workers are defined as markdown files with YAML frontmatter. The prompt is the worker. No config files, no role tables, no indirection.
 
 ## Core Principles
 
@@ -16,8 +18,8 @@ AI coding harnesses (Codex, Claude Code, Gemini CLI) are powerful but isolated �
 2. **Job done is holy.** Artifacts persist across timeout and process death. Every dispatch has an artifact path.
 3. **Errors are steering signals.** Every error tells the caller what failed, why, and what to try next.
 4. **Single-shot with curated context.** One well-prompted dispatch beats a swarm of under-specified workers.
-5. **Config over code.** Roles, models, timeouts — all TOML. The binary is generic.
-6. **Simplest viable dispatch.** CLI call > config > code. Escalate only when needed.
+5. **Prompt over config.** Worker identity lives in `.md` files with frontmatter defaults. The binary is generic.
+6. **Simplest viable dispatch.** CLI flags > frontmatter > hardcoded defaults. Escalate only when needed.
 
 ## Quick Start
 
@@ -26,84 +28,107 @@ git clone https://github.com/buildoak/agent-mux && cd agent-mux
 go build -o agent-mux ./cmd/agent-mux
 ```
 
-**Minimal dispatch** (JSON via `--stdin` — the canonical invocation pattern):
+**See what workers are available:**
+
+```bash
+./agent-mux config prompts
+# NAME        ENGINE  MODEL           EFFORT  TIMEOUT  DESCRIPTION
+# architect   claude  claude-sonnet-4-6  high  900      System design and migration planning
+# auditor     claude  claude-sonnet-4-6  high  900      Code review and correctness verification
+# explorer    codex   gpt-5.4-mini       low   300      Broad codebase exploration and mapping
+# grunt       codex   gpt-5.3-codex-spark low  120      Mechanical edits, renames, bulk changes
+# lifter      codex   gpt-5.4            high  1800     Scoped implementation with verification
+# ...
+```
+
+**Profile-based dispatch** (engine, model, effort, timeout, system prompt all resolved from the profile):
+
+```bash
+./agent-mux -P=lifter -C /repo "Add retry logic to client.ts with exponential backoff"
+```
+
+**Minimal dispatch** (JSON via `--stdin` -- the canonical machine invocation):
 
 ```bash
 printf '{"engine":"codex","prompt":"Review src/core.go for timeout edge cases","cwd":"/repo"}' \
   | ./agent-mux --stdin
 ```
 
-**Role-based dispatch** (engine, model, effort, timeout resolved from `config.toml`):
+**Async dispatch** (fire, collect later):
 
 ```bash
-printf '{"role":"scout","prompt":"Find all usages of deprecated API","cwd":"/repo"}' \
-  | ./agent-mux --stdin
+./agent-mux -P=lifter --async -C /repo "Implement retries in client.ts"
+# => {"kind":"async_started","dispatch_id":"01K...","artifact_dir":"..."}
+
+./agent-mux wait 01K...
+./agent-mux result 01K... --json
 ```
 
-Dispatch output is always a single JSON object on stdout. Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `wait`) default to human-readable but accept `--json`. The `config` subcommand (`config`, `config roles`, `config models`, `config skills`) introspects the fully-resolved configuration without dispatching. stderr carries NDJSON event stream and heartbeat lines.
+Dispatch output is always a single JSON object on stdout. Lifecycle subcommands (`list`, `status`, `result`, `inspect`, `wait`) default to human-readable but accept `--json`. stderr carries NDJSON event stream and heartbeat lines.
 
-## Configuration
+## Profiles
 
-Roles, models, and timeouts live in `.agent-mux/config.toml` alongside a `prompts/` directory for system prompt files.
+Worker identity lives in `~/.agent-mux/prompts/<name>.md`. Each file is a markdown document with optional YAML frontmatter that sets dispatch defaults:
 
-**Resolution order** (later wins): `~/.agent-mux/config.toml` (global) → `<cwd>/.agent-mux/config.toml` (project) → `--config` (explicit). Project config merges on top of global with **defined-wins** semantics — set fields override, absent fields inherit.
+```markdown
+---
+engine: codex
+model: gpt-5.4
+effort: high
+timeout: 1800
+description: "Scoped implementation with built-in verification"
+---
 
-**Minimal role definition:**
+# Lifter
 
-```toml
-[roles.scout]
-engine = "codex"
-model = "gpt-5.4-mini"
-effort = "low"
-timeout = 180
-system_prompt_file = "prompts/scout.md"
+You are a lifter. You build what was specified, verify it works, and report back.
+...
 ```
 
-Dispatch: `{"role":"scout","prompt":"Find all TODO comments","cwd":"/repo"}`
+`-P=lifter` loads `~/.agent-mux/prompts/lifter.md`, applies frontmatter defaults, and injects the markdown body as the system prompt.
 
-> **[Setup Guide](references/config-setup-guide.md)** — first-time walkthrough, roles.
-> **[TOML Reference](references/config-guide.md)** — full schema, every field, merge semantics.
+**Resolution order** (later wins): hardcoded defaults -> frontmatter -> CLI flags / JSON fields. Explicit flags always override frontmatter.
+
+`agent-mux config prompts` discovers all profiles with full metadata. `agent-mux config prompts --json` emits the catalog as a JSON array for programmatic consumption.
 
 ## Engines
 
 | Engine | Binary | Best For | Default Model |
 |--------|--------|----------|---------------|
 | `codex` | `codex` | Implementation, debugging, code edits | `gpt-5.4` |
-| `claude` | `claude` | Planning, synthesis, long-form reasoning | `claude-sonnet-4-20250514` |
+| `claude` | `claude` | Planning, synthesis, long-form reasoning | `claude-sonnet-4-6` |
 | `gemini` | `gemini` | Second opinion, contrast checks | `gemini-2.5-pro` |
 
-Engine CLIs must be installed separately — agent-mux dispatches to them, it does not bundle them.
+Engine CLIs must be installed separately -- agent-mux dispatches to them, it does not bundle them.
 
 ## Features
 
-- **Role-based dispatch** — Roles resolve engine, model, effort, timeout, skills, and system prompt from TOML config. One field replaces six flags.
-- **Variant system** — Swap engines within a role while keeping the same semantics. `{"role":"lifter","variant":"claude"}` runs a lifter with Claude instead of Codex.
-- **Recovery and signals** — Continue timed-out work with `--recover`. Steer live dispatches with inbox signals.
-- **Two-phase timeout** — Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
-- **Async dispatch** — Fire and forget with `--async`. Collect results later with `wait` or `result`.
-- **Event streaming** — 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.
-- **Hooks** — Pattern-based deny/warn rules evaluated on harness events. Safety preamble injection.
-- **Profiles** — Load orchestrator personas from markdown specs with frontmatter-driven defaults.
-- **Skill injection** — Load `SKILL.md` runbooks into the dispatch prompt. Skills carry scripts, references, and setup.
-- **Liveness supervision** — 5-second watchdog cycle detects hung harnesses. Process-group signals ensure grandchildren die with the harness.
-- **Durable persistence** — Every dispatch writes `meta.json` and `result.json` under `~/.agent-mux/dispatches/<id>/`. Artifact directory created before the harness starts.
-- **config skills** — `agent-mux config skills` lists all discoverable skills across configured search paths.
+- **Profile-based dispatch** -- `-P=<name>` loads engine, model, effort, timeout, skills, and system prompt from a single markdown file. One flag replaces six.
+- **Recovery and signals** -- Continue timed-out work with `--recover`. Steer live dispatches with inbox signals.
+- **Two-phase timeout** -- Soft timeout fires a wrap-up signal, grace period allows clean exit, hard timeout kills. Artifacts are preserved at every phase.
+- **Async dispatch** -- Fire and forget with `--async`. Collect results later with `wait` or `result`.
+- **Event streaming** -- 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.
+- **Hooks** -- Pattern-based deny/warn rules evaluated on harness events.
+- **Skill injection** -- Load `SKILL.md` runbooks into the dispatch prompt. Skills carry scripts, references, and setup.
+- **Liveness supervision** -- 5-second watchdog cycle detects hung harnesses. Process-group signals ensure grandchildren die with the harness.
+- **Durable persistence** -- Every dispatch writes `meta.json` and `result.json` under `~/.agent-mux/dispatches/<id>/`. Artifact directory created before the harness starts.
+- **config prompts** -- `agent-mux config prompts` lists all discoverable profiles with engine, model, effort, timeout, and description.
 
 ## Authentication
 
 | Engine | Env Var | Fallback |
 |--------|---------|----------|
 | Codex | `OPENAI_API_KEY` | OAuth device auth via `codex auth` (`~/.codex/auth.json`) |
-| Claude | `ANTHROPIC_API_KEY` | Device OAuth (subscription login) — **not recommended** |
-| Gemini | `GEMINI_API_KEY` | — |
+| Claude | `ANTHROPIC_API_KEY` | Device OAuth (subscription login) -- **not recommended** |
+| Gemini | `GEMINI_API_KEY` | -- |
 
 Both Codex and Claude support subscription-based OAuth as a fallback when no
-API key is set. agent-mux will attempt dispatch if any auth path is available —
+API key is set. agent-mux will attempt dispatch if any auth path is available --
 `MISSING_API_KEY` is a warning, not a hard failure.
 
 > **Anthropic ToS compliance:** The `claude` engine uses Claude Code SDK with
-> your API key (`ANTHROPIC_API_KEY`) — this is the fully compliant path. Device
-> OAuth (subscription login) falls under Anthropic's Consumer ToS §3.7 which
+> your API key (`ANTHROPIC_API_KEY`) -- this is the fully compliant path. Device
+> OAuth (subscription login) falls under Anthropic's Consumer ToS which
 > restricts automated/scripted access outside the API. **Always use
 > `ANTHROPIC_API_KEY` for the `claude` engine in automated workflows.**
 
@@ -111,7 +136,7 @@ API key is set. agent-mux will attempt dispatch if any auth path is available �
 
 | Doc | What |
 |-----|------|
-| [DOCS.md](DOCS.md) | Full technical reference — architecture, config schema, dispatch lifecycle |
+| [DOCS.md](DOCS.md) | Full technical reference -- architecture, config, dispatch lifecycle |
 | [SKILL.md](SKILL.md) | Operational manual for AI agents using agent-mux |
 | [BACKLOG.md](BACKLOG.md) | Open bugs, feature requests, spec gaps, and known limitations |
 | [references/](references/) | Engine comparison, prompting guide, output contract, config guides, installation |
