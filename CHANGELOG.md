@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.2.3] - 2026-04-04
+
+### Fixed
+
+- **Stale role/variant references in eval rubrics** — `ax-eval/MANIFEST.md` checklist items and error examples updated from `-R=` (removed role flag) to `-P=` (profile flag). These rubrics are consumed by LLM evaluators; stale references were actively misleading eval scoring.
+- **Stale references in test documentation** — `tests/axeval/CASES-V2.md` updated: `config roles --json` to `config prompts --json`, `-R=` to `-P=`, "role" vocabulary to "profile" where it described the current system.
+- **Version constant out of sync** — `main.go` version bumped from `v3.2.0` to `v3.2.3` to match the release timeline.
+
 ### Removed
 
 - **Pipeline system** — `internal/pipeline/` and all pipeline orchestration removed. The `-P=` flag, `PipelineResult`, `PipelineStep`, and `config.toml` `[pipelines]` block no longer exist. Multi-step coordination is the caller's responsibility via chained individual dispatches.

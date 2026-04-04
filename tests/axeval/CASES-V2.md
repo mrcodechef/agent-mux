@@ -86,13 +86,13 @@
 **Tests:** Role system_prompt_file content actually reaches the worker
 **Setup:** Create fixture role with `system_prompt_file = "test-sysprompt.md"` containing canary `ROLE_SYSPROMPT_CANARY_9931`
 **Prompt:** `"Repeat any canary phrases from your system instructions verbatim."`
-**ExtraFlags:** `["-R=sysprompt-test"]`
+**ExtraFlags:** `["-P=sysprompt-test"]`
 **Evaluators:**
 - `statusIs("completed")`
 - `responseContains("ROLE_SYSPROMPT_CANARY_9931")`
 
 ### M3: `variant-resolution` — REMOVED
-**Status:** Removed. Variants are dead; roles are flat definitions. The `variant-test-mini` fixture is now just a regular role named `variant-test-mini`.
+**Status:** Removed. Variants are dead; profiles are flat markdown files. The `variant-test-mini` fixture is now just a regular profile named `variant-test-mini`.
 
 ### M4: `response-truncation` — REMOVED
 **Status:** Removed. `--response-max-chars` flag and truncation logic no longer exist in the codebase (removed in 3.1.0). `full_output_path` remains a dead compatibility stub, not an active spill-path contract. The case was asserting presence of truncation; the correct behavior is that truncation does not happen. No replacement case added yet.
@@ -135,11 +135,11 @@
 **Step 4:** Run `agent-mux inspect --json <id>` → assert record, response, artifact_dir, meta all present
 
 ### M10: `config-introspection`
-**Tests:** `config`, `config roles --json`, `config skills --json` all return valid JSON
+**Tests:** `config`, `config prompts --json`, `config skills --json` all return valid JSON
 **Implementation:** Run each subcommand, parse output, assert non-empty and structurally valid
 **Evaluators:**
 - `config`: has `defaults`, `timeout`, `_sources` keys
-- `config roles --json`: array with at least one entry having `name`, `engine`
+- `config prompts --json`: array with at least one entry having `name`, `engine`
 - `config skills --json`: array (may be empty but valid JSON)
 ### M11: `handoff-summary-extraction`
 **Tests:** Worker response with `## Summary` header gets extracted to handoff_summary correctly
@@ -180,7 +180,7 @@
 | **P1** | M4: response-truncation | REMOVED — truncation feature removed from codebase | — |
 | **P1** | M12: async-host-pid-status-json | Catches async observability failures — orphan detection depends on this | Med |
 | **P1** | M6: stdin-json-dispatch | Catches the entire programmatic dispatch path (every coordinator uses this) | Low |
-| **P2** | M3: variant-resolution | REMOVED — variants are dead; `variant-test-mini` is a regular role | — |
+| **P2** | M3: variant-resolution | REMOVED — variants are dead; `variant-test-mini` is a regular profile | — |
 | **P2** | M11: handoff-summary-extraction | Catches summary extraction bugs in `handoff_summary` extraction | Low |
 | **P2** | M13: skill-scripts-on-path | Catches skill scripts silently unavailable | Low |
 | **P2** | M7: preview-dry-run | Catches preview command broken — coordinators use this for pre-flight | Low |

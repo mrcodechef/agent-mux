@@ -262,7 +262,7 @@ Write the corrected command on its own line starting with "CORRECTED: ".
   "code": "frozen_killed",
   "message": "Worker killed after prolonged silence.",
   "hint": "Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
-  "example": "Retry with a narrower task: agent-mux -R=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
+  "example": "Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
   "retryable": true
 }
 ```
@@ -276,24 +276,24 @@ Write the corrected command on its own line starting with "CORRECTED: ".
 
 ---
 
-### L1.5 — config_error (bad role)
+### L1.5 — config_error (bad profile)
 
-**Original command:** `agent-mux -R=super-worker --cwd /repo "Build the feature"`
+**Original command:** `agent-mux -P=super-worker --cwd /repo "Build the feature"`
 
 **Error JSON:**
 ```json
 {
   "code": "config_error",
   "message": "Configuration is invalid.",
-  "hint": "agent-mux could not load or validate the referenced config, role, or control path.",
-  "example": "Fix the config file or role name, then retry. Example: agent-mux -R lifter --config /path/to/agent-mux.yaml --cwd /repo \"<prompt>\".",
+  "hint": "agent-mux could not load or validate the referenced config, profile, or control path.",
+  "example": "Fix the config file or profile name, then retry. Example: agent-mux -P=lifter --cwd /repo \"<prompt>\".",
   "retryable": true
 }
 ```
 
 **Checklist (4 items):**
-- [ ] Uses a different (plausibly valid) role name (e.g. `lifter`, `scout`, `architect`)
-- [ ] Suggests checking available roles (`agent-mux config roles`) or acknowledges the role was invalid
+- [ ] Uses a different (plausibly valid) profile name (e.g. `lifter`, `scout`, `architect`)
+- [ ] Suggests checking available profiles (`agent-mux config prompts`) or acknowledges the profile was invalid
 - [ ] Preserves the original prompt intent
 - [ ] Command is syntactically valid
 
@@ -388,7 +388,7 @@ Each step should use --async, wait for completion, and check the result before p
 - [ ] Uses `agent-mux result <id> --json` to collect results
 - [ ] Uses `--cwd` or `-C=` to set working directory
 - [ ] Uses valid engines (`codex`, `claude`, or `gemini`)
-- [ ] Uses roles (`-R=`) or at minimum valid engine flags
+- [ ] Uses profiles (`-P=`) or at minimum valid engine flags
 - [ ] Does NOT use invalid flags (`--sandbox none`, `--output`, or other non-existent flags)
 - [ ] Each step has a distinct, specific prompt (not vague)
 - [ ] Redirects stderr (`2>/dev/null`) on agent-mux calls
@@ -426,7 +426,7 @@ Show the exact commands.
 - [ ] Waits for all 3 to complete before starting Step 2
 - [ ] Collects results from all 3 dispatches (`result <id> --json`)
 - [ ] Step 2 receives context from Step 1 results (via prompt injection or `--context-file`)
-- [ ] Uses appropriate roles/engines (research -> Claude or Codex; synthesis -> Claude)
+- [ ] Uses appropriate profiles/engines (research -> Claude or Codex; synthesis -> Claude)
 - [ ] Uses `--cwd` for each dispatch
 - [ ] Does NOT use invalid flags
 - [ ] Redirects stderr (`2>/dev/null`)
@@ -511,7 +511,7 @@ The dispatch ID is "01KMY3ABC".
 
 ---
 
-### L2.5 — Role and context passing
+### L2.5 — Profile and context passing
 
 **Prompt to agent:**
 ```
@@ -528,21 +528,21 @@ Now complete this task:
 You are a coordinator agent with access to agent-mux. A user asks you to:
 "We have a detailed specification in /tmp/spec.md (2000 lines). Have a scout quickly scan it, then have an architect plan the implementation, then have a lifter implement the first module."
 
-Plan this 3-step pipeline using agent-mux roles and context passing.
+Plan this 3-step pipeline using agent-mux profiles and context passing.
 Show the exact commands, including how context flows between steps.
 ```
 
 **Checklist (10 items):**
-- [ ] Uses `-R=scout` for the first step (scanning)
-- [ ] Uses `-R=architect` for the second step (planning)
-- [ ] Uses `-R=lifter` for the third step (implementation)
+- [ ] Uses `-P=scout` for the first step (scanning)
+- [ ] Uses `-P=architect` for the second step (planning)
+- [ ] Uses `-P=lifter` for the third step (implementation)
 - [ ] Passes the spec to the first step via `--context-file` or prompt inclusion
 - [ ] Passes output from step 1 to step 2 (via `--context-file`, prompt injection, or result piping)
 - [ ] Passes output from step 2 to step 3
 - [ ] Uses `--async` + `wait` + `result` collection pattern
 - [ ] Uses `--cwd` for each dispatch
-- [ ] Does NOT use roles that don't exist in the skill doc
-- [ ] Role selection is appropriate for each step's cognitive demand
+- [ ] Does NOT use profiles that don't exist in the skill doc
+- [ ] Profile selection is appropriate for each step's cognitive demand
 
 ---
 
@@ -575,7 +575,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 
 **Checklist (10 items):**
 - [ ] Plan shows strategic thinking (not just mechanical step execution)
-- [ ] Uses appropriate roles (e.g. `researcher`/`explorer` for analysis, `lifter` for implementation)
+- [ ] Uses appropriate profiles (e.g. `researcher`/`explorer` for analysis, `lifter` for implementation)
 - [ ] Uses `--async` + `wait` + `result` collection pattern
 - [ ] Defines verification gates (concrete, testable conditions for "done")
 - [ ] Uses valid agent-mux syntax and flags
@@ -609,7 +609,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 
 **Checklist (10 items):**
 - [ ] Follows a clear sequential pipeline (plan -> implement -> verify)
-- [ ] Uses appropriate roles (`-R=architect`, `-R=lifter`, `-R=auditor`)
+- [ ] Uses appropriate profiles (`-P=architect`, `-P=lifter`, `-P=auditor`)
 - [ ] Uses `--async` + `wait` + `result` collection for each step
 - [ ] Passes context from one step to the next (via `--context-file`, prompt, or result)
 - [ ] Uses valid agent-mux syntax throughout
@@ -646,7 +646,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 - [ ] Breaks the work into smaller chunks (e.g. groups of tables) OR uses `--recover` for continuation
 - [ ] Checks `activity.files_changed` to decide whether to recover or reframe
 - [ ] Uses appropriate effort tiers (`high` or `xhigh` for long tasks)
-- [ ] Sets appropriate timeouts or uses roles with long timeouts
+- [ ] Sets appropriate timeouts or uses profiles with long timeouts
 - [ ] Uses valid agent-mux syntax
 - [ ] Has a clear escalation path (what to do if recovery also fails)
 - [ ] Plan demonstrates strategic depth, not just mechanical retry
@@ -678,7 +678,7 @@ You have access to agent-mux. Here is the agent-mux skill documentation:
 **Checklist (10 items):**
 - [ ] Dispatches exactly 4 parallel `--async` commands
 - [ ] Each dispatch targets a different service directory via `--cwd`
-- [ ] Uses an appropriate role (`-R=scout` for scanning)
+- [ ] Uses an appropriate profile (`-P=scout` for scanning)
 - [ ] Waits for all 4 to complete
 - [ ] Collects results from all 4 dispatches
 - [ ] Aggregates or summarizes the findings
