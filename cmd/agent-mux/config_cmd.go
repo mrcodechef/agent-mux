@@ -6,9 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"sort"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/buildoak/agent-mux/internal/config"
@@ -18,12 +15,10 @@ import (
 func runConfigCommand(args []string, stdout io.Writer) int {
 	sub, rest := splitConfigSub(args)
 	switch sub {
-	case "roles":
-		return runConfigRoles(rest, stdout)
-	case "models":
-		return runConfigModels(rest, stdout)
 	case "skills":
 		return runConfigSkills(rest, stdout)
+	case "prompts":
+		return runConfigPrompts(rest, stdout)
 	default:
 		return runConfigRoot(args, stdout)
 	}
@@ -36,7 +31,7 @@ func splitConfigSub(args []string) (string, []string) {
 		return "", nil
 	}
 	switch args[0] {
-	case "roles", "models", "skills":
+	case "skills", "prompts":
 		return args[0], args[1:]
 	default:
 		return "", args
@@ -50,138 +45,40 @@ func runConfigRoot(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("agent-mux config", flag.ContinueOnError)
 	fs.SetOutput(&flagOutput)
 
-	var configPath, cwd string
-	var sourcesOnly bool
-	fs.StringVar(&configPath, "config", "", "Override config path")
-	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
-	fs.BoolVar(&sourcesOnly, "sources", false, "Show only the list of loaded config files")
+	var cwd string
+	fs.StringVar(&cwd, "cwd", "", "Working directory for discovery")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
 	}
 
-	cfg, sources, err := config.LoadConfigWithSources(configPath, cwd)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
+	effectiveCwd := cwd
+	if effectiveCwd == "" {
+		effectiveCwd, _ = os.Getwd()
 	}
 
-	if sourcesOnly {
-		writeCompactJSON(stdout, map[string]any{
-			"kind":    "config_sources",
-			"sources": sources,
-		})
-		return 0
-	}
-
-	// Marshal the full resolved config with _sources appended.
-	raw, err := configToJSONMap(cfg)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "internal_error", fmt.Sprintf("marshal config: %v", err), "")
-	}
-	raw["_sources"] = sources
-	writeCompactJSON(stdout, raw)
-	return 0
-}
-
-// --- agent-mux config roles ---
-
-func runConfigRoles(args []string, stdout io.Writer) int {
-	var flagOutput bytes.Buffer
-	fs := flag.NewFlagSet("agent-mux config roles", flag.ContinueOnError)
-	fs.SetOutput(&flagOutput)
-
-	var configPath, cwd string
-	var jsonOutput bool
-	fs.StringVar(&configPath, "config", "", "Override config path")
-	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
-	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
-
-	if err := fs.Parse(normalizeArgs(args)); err != nil {
-		return handleLifecycleParseError(stdout, &flagOutput, err)
-	}
-
-	cfg, _, err := config.LoadConfigWithSources(configPath, cwd)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
-	}
-
-	type roleEntry struct {
-		Name    string `json:"name"`
-		Engine  string `json:"engine"`
-		Model   string `json:"model"`
-		Effort  string `json:"effort"`
-		Timeout int    `json:"timeout"`
-	}
-
-	names := sortedKeys(cfg.Roles)
-	var entries []roleEntry
-	for _, name := range names {
-		role := cfg.Roles[name]
-		entries = append(entries, roleEntry{
-			Name:    name,
-			Engine:  role.Engine,
-			Model:   role.Model,
-			Effort:  role.Effort,
-			Timeout: role.Timeout,
-		})
-	}
-
-	if jsonOutput {
-		writeCompactJSON(stdout, entries)
-		return 0
-	}
-
-	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "NAME\tENGINE\tMODEL\tEFFORT\tTIMEOUT")
-	for _, e := range entries {
-		timeout := "-"
-		if e.Timeout > 0 {
-			timeout = fmt.Sprintf("%ds", e.Timeout)
-		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n",
-			e.Name,
-			dashIfEmpty(e.Engine),
-			dashIfEmpty(e.Model),
-			dashIfEmpty(e.Effort),
-			timeout,
-		)
-	}
-	_ = tw.Flush()
-	return 0
-}
-
-// --- agent-mux config models ---
-
-func runConfigModels(args []string, stdout io.Writer) int {
-	var flagOutput bytes.Buffer
-	fs := flag.NewFlagSet("agent-mux config models", flag.ContinueOnError)
-	fs.SetOutput(&flagOutput)
-
-	var configPath, cwd string
-	var jsonOutput bool
-	fs.StringVar(&configPath, "config", "", "Override config path")
-	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
-	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON object")
-
-	if err := fs.Parse(normalizeArgs(args)); err != nil {
-		return handleLifecycleParseError(stdout, &flagOutput, err)
-	}
-
-	cfg, _, err := config.LoadConfigWithSources(configPath, cwd)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
-	}
-
-	if jsonOutput {
-		writeCompactJSON(stdout, cfg.Models)
-		return 0
-	}
-
-	engines := sortedKeys(cfg.Models)
-	for _, engine := range engines {
-		models := cfg.Models[engine]
-		fmt.Fprintf(stdout, "%s: %s\n", engine, strings.Join(models, ", "))
-	}
+	// Emit a summary of hardcoded defaults + env overrides.
+	writeCompactJSON(stdout, map[string]any{
+		"kind": "config_summary",
+		"defaults": map[string]any{
+			"effort":         "high",
+			"max_depth":      config.MaxDepth(),
+			"grace_sec":      config.GraceSec(),
+			"permission_mode": config.PermissionMode(),
+		},
+		"liveness": map[string]any{
+			"heartbeat_interval_sec": config.HeartbeatIntervalSec(),
+			"silence_warn_seconds":   config.SilenceWarnSeconds(),
+			"silence_kill_seconds":   config.SilenceKillSeconds(),
+		},
+		"effort_timeouts": map[string]int{
+			"low":    config.TimeoutForEffort("low"),
+			"medium": config.TimeoutForEffort("medium"),
+			"high":   config.TimeoutForEffort("high"),
+			"xhigh":  config.TimeoutForEffort("xhigh"),
+		},
+		"models": config.DefaultModels(),
+	})
 	return 0
 }
 
@@ -192,34 +89,21 @@ func runConfigSkills(args []string, stdout io.Writer) int {
 	fs := flag.NewFlagSet("agent-mux config skills", flag.ContinueOnError)
 	fs.SetOutput(&flagOutput)
 
-	var configPath, cwd string
+	var cwd string
 	var jsonOutput bool
-	fs.StringVar(&configPath, "config", "", "Override config path")
-	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
+	fs.StringVar(&cwd, "cwd", "", "Working directory for skill discovery")
 	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
 	}
 
-	cfg, sources, err := config.LoadConfigWithSources(configPath, cwd)
-	if err != nil {
-		return emitLifecycleError(stdout, 1, "config_error", fmt.Sprintf("load config: %v", err), "")
-	}
-
-	// Determine effective cwd for skill discovery.
 	effectiveCwd := cwd
 	if effectiveCwd == "" {
 		effectiveCwd, _ = os.Getwd()
 	}
 
-	// Determine configDir from the first loaded source (if any).
-	var configDir string
-	if len(sources) > 0 {
-		configDir = filepath.Dir(filepath.Dir(sources[0])) // strip .agent-mux/config.toml → parent
-	}
-
-	skills := config.DiscoverSkills(effectiveCwd, configDir, cfg.Skills.SearchPaths)
+	skills := config.DiscoverSkills(effectiveCwd)
 
 	if jsonOutput {
 		writeCompactJSON(stdout, skills)
@@ -240,76 +124,44 @@ func runConfigSkills(args []string, stdout io.Writer) int {
 	return 0
 }
 
-// --- helpers ---
+// --- agent-mux config prompts ---
 
-// configToJSONMap builds a JSON-friendly map from the Config using TOML-style
-// key names so the output matches what users see in their config files.
-func configToJSONMap(cfg *config.Config) (map[string]any, error) {
-	defaults := map[string]any{
-		"engine":          cfg.Defaults.Engine,
-		"model":           cfg.Defaults.Model,
-		"effort":          cfg.Defaults.Effort,
-		"sandbox":         cfg.Defaults.Sandbox,
-		"permission_mode": cfg.Defaults.PermissionMode,
-		"max_depth":       cfg.Defaults.MaxDepth,
+func runConfigPrompts(args []string, stdout io.Writer) int {
+	var flagOutput bytes.Buffer
+	fs := flag.NewFlagSet("agent-mux config prompts", flag.ContinueOnError)
+	fs.SetOutput(&flagOutput)
+
+	var cwd string
+	var jsonOutput bool
+	fs.StringVar(&cwd, "cwd", "", "Working directory for prompt file discovery")
+	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON array")
+
+	if err := fs.Parse(normalizeArgs(args)); err != nil {
+		return handleLifecycleParseError(stdout, &flagOutput, err)
 	}
 
-	roles := make(map[string]any, len(cfg.Roles))
-	for name, role := range cfg.Roles {
-		r := map[string]any{
-			"engine":  role.Engine,
-			"model":   role.Model,
-			"effort":  role.Effort,
-			"timeout": role.Timeout,
-			"skills":  role.Skills,
-		}
-		if role.SystemPromptFile != "" {
-			r["system_prompt_file"] = role.SystemPromptFile
-		}
-		roles[name] = r
+	effectiveCwd := cwd
+	if effectiveCwd == "" {
+		effectiveCwd, _ = os.Getwd()
 	}
 
-	timeout := map[string]any{
-		"low":    cfg.Timeout.Low,
-		"medium": cfg.Timeout.Medium,
-		"high":   cfg.Timeout.High,
-		"xhigh":  cfg.Timeout.XHigh,
-		"grace":  cfg.Timeout.Grace,
+	prompts := config.DiscoverPromptFiles(effectiveCwd)
+
+	if jsonOutput {
+		writeCompactJSON(stdout, prompts)
+		return 0
 	}
 
-	liveness := map[string]any{
-		"heartbeat_interval_sec": cfg.Liveness.HeartbeatIntervalSec,
-		"silence_warn_seconds":   cfg.Liveness.SilenceWarnSeconds,
-		"silence_kill_seconds":   cfg.Liveness.SilenceKillSeconds,
+	if len(prompts) == 0 {
+		fmt.Fprintln(stdout, "No prompt files found.")
+		return 0
 	}
 
-	hooks := map[string]any{
-		"pre_dispatch":      cfg.Hooks.PreDispatch,
-		"on_event":          cfg.Hooks.OnEvent,
-		"event_deny_action": cfg.Hooks.EventDenyAction,
+	tw := tabwriter.NewWriter(stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "NAME\tPATH\tSOURCE")
+	for _, p := range prompts {
+		fmt.Fprintf(tw, "%s\t%s\t%s\n", p.Name, p.Path, p.Source)
 	}
-
-	async := map[string]any{
-		"poll_interval": cfg.Async.PollInterval,
-	}
-
-	m := map[string]any{
-		"defaults": defaults,
-		"models":   cfg.Models,
-		"roles":    roles,
-		"timeout":  timeout,
-		"liveness": liveness,
-		"hooks":    hooks,
-		"async":    async,
-	}
-	return m, nil
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
+	_ = tw.Flush()
+	return 0
 }

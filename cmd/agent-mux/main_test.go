@@ -8,13 +8,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/steer"
 	"github.com/buildoak/agent-mux/internal/types"
@@ -743,137 +741,34 @@ func TestBuildDispatchSpecPrefersProfileFlag(t *testing.T) {
 	}
 }
 
-func TestLoadSystemPromptFileResolvesRelativeToRoleSourceDir(t *testing.T) {
-	t.Parallel()
+// Tests for loadSystemPromptFile, prependSystemPrompt, and role-based hooks
+// were removed when config.toml and roles were eliminated.
 
-	dir := t.TempDir()
-	promptPath := filepath.Join(dir, "prompts", "lifter.md")
-	if err := os.MkdirAll(filepath.Dir(promptPath), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(promptPath, []byte("role prompt"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
 
-	got, err := loadSystemPromptFile(dir, filepath.Join("prompts", "lifter.md"))
-	if err != nil {
-		t.Fatalf("loadSystemPromptFile: %v", err)
-	}
-	if got != "role prompt" {
-		t.Fatalf("prompt = %q, want %q", got, "role prompt")
-	}
-}
-
-func TestLoadSystemPromptFilePromptsSubfolderFallback(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	// Only create the file inside prompts/ subfolder, NOT directly in dir.
-	promptsDir := filepath.Join(dir, "prompts")
-	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(promptsDir, "lifter.md"), []byte("prompts subfolder content"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	// Pass just "lifter.md" (not "prompts/lifter.md") — should fall through to prompts/ subfolder.
-	got, err := loadSystemPromptFile(dir, "lifter.md")
-	if err != nil {
-		t.Fatalf("loadSystemPromptFile: %v", err)
-	}
-	if got != "prompts subfolder content" {
-		t.Fatalf("prompt = %q, want %q", got, "prompts subfolder content")
-	}
-}
-
-func TestLoadSystemPromptFileDirectPathBeforePromptsSubfolder(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	// Create file in BOTH direct location and prompts/ subfolder with different content.
-	promptsDir := filepath.Join(dir, "prompts")
-	if err := os.MkdirAll(promptsDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "lifter.md"), []byte("direct content"), 0o644); err != nil {
-		t.Fatalf("WriteFile direct: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(promptsDir, "lifter.md"), []byte("prompts content"), 0o644); err != nil {
-		t.Fatalf("WriteFile prompts: %v", err)
-	}
-
-	// Direct path should win.
-	got, err := loadSystemPromptFile(dir, "lifter.md")
-	if err != nil {
-		t.Fatalf("loadSystemPromptFile: %v", err)
-	}
-	if got != "direct content" {
-		t.Fatalf("prompt = %q, want direct path to win", got)
-	}
-}
-
-func TestLoadSystemPromptFileRejectsAbsolutePath(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-	absPath := filepath.Join(dir, "prompt.md")
-
-	_, err := loadSystemPromptFile(dir, absPath)
-	if err == nil {
-		t.Fatal("loadSystemPromptFile error = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "absolute paths are not allowed") {
-		t.Fatalf("error = %q, want absolute path rejection", err)
-	}
-}
-
-func TestLoadSystemPromptFileRejectsEscapeOutsideSourceDir(t *testing.T) {
-	t.Parallel()
-
-	dir := t.TempDir()
-
-	_, err := loadSystemPromptFile(dir, "../secret.md")
-	if err == nil {
-		t.Fatal("loadSystemPromptFile error = nil, want error")
-	}
-	if !strings.Contains(err.Error(), "invalid system prompt file") {
-		t.Fatalf("error = %q, want invalid system prompt file", err)
-	}
-	if !strings.Contains(err.Error(), "escapes root") {
-		t.Fatalf("error = %q, want root escape rejection", err)
-	}
-}
-
-func TestPrependSystemPromptLayersRoleAndCLI(t *testing.T) {
-	t.Parallel()
-
-	got := prependSystemPrompt("role prompt", "cli file\n\ninline")
-	if got != "role prompt\n\ncli file\n\ninline" {
-		t.Fatalf("system prompt = %q, want layered prompt", got)
-	}
-}
-
-func TestRunRejectsDeniedSystemPromptContent(t *testing.T) {
+func TestRunRejectsDeniedSystemPromptContentViaHookDir(t *testing.T) {
 	isolateHome(t)
 
+	cwd := t.TempDir()
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
-	scriptPath := writeTempHookScript(t, t.TempDir(), "deny-system-prompt.sh", `#!/bin/bash
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	writeTempHookScript(t, preDir, "deny-system-prompt.sh", `#!/bin/bash
 if [[ "${HOOK_SYSTEM_PROMPT}" == *"blocked secret"* ]]; then
 	echo "blocked secret" >&2
 	exit 1
 fi
 exit 0
 `)
-	cfgPath := writeTempConfig(t, fmt.Sprintf("[hooks]\npre_dispatch = [%q]\n", scriptPath))
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	exitCode := run([]string{
 		"--engine", "codex",
+		"--cwd", cwd,
 		"--artifact-dir", artifactDir,
-		"--config", cfgPath,
 		"--system-prompt", "do not expose blocked secret",
 		"summarize the repository",
 	}, strings.NewReader(""), &stdout, &stderr)
@@ -889,62 +784,6 @@ exit 0
 		t.Fatalf("error = %#v, want prompt_denied", result.Error)
 	}
 	if !strings.Contains(result.Error.Message, `matched: "blocked secret"`) {
-		t.Fatalf("error.message = %q, want matched hook reason", result.Error.Message)
-	}
-}
-
-func TestRunRejectsDeniedRoleSystemPromptFileContent(t *testing.T) {
-	isolateHome(t)
-
-	configDir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(configDir, "prompts"), 0o755); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
-	cfgPath := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(filepath.Join(configDir, "prompts", "reviewer.md"), []byte("contains blocked payload"), 0o644); err != nil {
-		t.Fatalf("WriteFile prompt: %v", err)
-	}
-	scriptPath := writeTempHookScript(t, configDir, "deny-role-system-prompt.sh", `#!/bin/bash
-if [[ "${HOOK_SYSTEM_PROMPT}" == *"blocked payload"* ]]; then
-	echo "blocked payload" >&2
-	exit 1
-fi
-exit 0
-`)
-	if err := os.WriteFile(cfgPath, []byte(strings.TrimSpace(fmt.Sprintf(`
-[hooks]
-pre_dispatch = [%q]
-
-[roles.reviewer]
-engine = "codex"
-model = "gpt-5.4"
-system_prompt_file = "prompts/reviewer.md"
-`, scriptPath))), 0o644); err != nil {
-		t.Fatalf("WriteFile config: %v", err)
-	}
-	t.Setenv("PATH", t.TempDir())
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"--config", cfgPath,
-		"--cwd", configDir,
-		"--role", "reviewer",
-		"--artifact-dir", filepath.Join(t.TempDir(), "artifacts") + "/",
-		"summarize the repository",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodeResult(t, stdout.Bytes())
-	if result.Status != types.StatusFailed {
-		t.Fatalf("status = %q, want %q", result.Status, types.StatusFailed)
-	}
-	if result.Error == nil || result.Error.Code != "prompt_denied" {
-		t.Fatalf("error = %#v, want prompt_denied", result.Error)
-	}
-	if !strings.Contains(result.Error.Message, `matched: "blocked payload"`) {
 		t.Fatalf("error.message = %q, want matched hook reason", result.Error.Message)
 	}
 }
@@ -1282,25 +1121,7 @@ func TestRunStdinRejectsNonPositiveGrace(t *testing.T) {
 	}
 }
 
-func TestRunPreviewRejectsConfigWithNonPositiveGrace(t *testing.T) {
-	configDir := t.TempDir()
-	configPath := filepath.Join(configDir, "config.toml")
-	if err := os.WriteFile(configPath, []byte("[timeout]\ngrace = 0\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile(config.toml): %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"preview", "--config", configPath, "--engine", "codex", "hello"}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 1 {
-		t.Fatalf("exit code = %d, want 1; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	result := decodeResult(t, stdout.Bytes())
-	if result.Error == nil || result.Error.Code != "invalid_input" {
-		t.Fatalf("error = %#v, want invalid_input", result.Error)
-	}
-}
+// TestRunPreviewRejectsConfigWithNonPositiveGrace removed — grace is now hardcoded.
 
 func TestRunPreviewRejectsProfileWithNonPositiveTimeout(t *testing.T) {
 	cwd := t.TempDir()
@@ -1668,9 +1489,13 @@ func TestRunLeavesPromptUnchangedWithoutContextFile(t *testing.T) {
 func TestRunHookScriptDoesNotInjectIntoPrompt(t *testing.T) {
 	isolateHome(t)
 
+	cwd := t.TempDir()
 	artifactDir := filepath.Join(t.TempDir(), "artifacts") + "/"
-	scriptPath := writeTempHookScript(t, t.TempDir(), "allow.sh", "#!/bin/bash\nexit 0\n")
-	cfgPath := writeTempConfig(t, fmt.Sprintf("[hooks]\npre_dispatch = [%q]\n", scriptPath))
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	writeTempHookScript(t, preDir, "allow.sh", "#!/bin/bash\nexit 0\n")
 	t.Setenv("PATH", t.TempDir())
 
 	var stdout bytes.Buffer
@@ -1678,8 +1503,8 @@ func TestRunHookScriptDoesNotInjectIntoPrompt(t *testing.T) {
 	prompt := "summarize the current repository state"
 	exitCode := run([]string{
 		"--engine", "codex",
+		"--cwd", cwd,
 		"--artifact-dir", artifactDir,
-		"--config", cfgPath,
 		prompt,
 	}, strings.NewReader(""), &stdout, &stderr)
 	if exitCode != 0 && exitCode != 1 {
@@ -1704,25 +1529,6 @@ type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) {
 	return len(p), nil
-}
-
-func writeTempConfig(t *testing.T, content string) string {
-	t.Helper()
-
-	f, err := os.CreateTemp("", "agent-mux-*.toml")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := f.WriteString(content); err != nil {
-		f.Close()
-		t.Fatal(err)
-	}
-	if err := f.Close(); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Remove(f.Name()) })
-
-	return f.Name()
 }
 
 func writeTempHookScript(t *testing.T, dir, name, content string) string {
@@ -1944,25 +1750,6 @@ func readFIFOTestPayload(t *testing.T, reader *os.File) string {
 	return ""
 }
 
-func stringSliceFromJSONValue(t *testing.T, value any) []string {
-	t.Helper()
-
-	raw, ok := value.([]any)
-	if !ok {
-		t.Fatalf("value = %#v, want []any", value)
-	}
-
-	out := make([]string, 0, len(raw))
-	for _, item := range raw {
-		s, ok := item.(string)
-		if !ok {
-			t.Fatalf("item = %#v, want string", item)
-		}
-		out = append(out, s)
-	}
-	return out
-}
-
 func readDispatchMeta(t *testing.T, artifactDir string) dispatchMetaForTest {
 	t.Helper()
 
@@ -2028,267 +1815,8 @@ func TestFlagSetVisitDoesNotTrackDefaults(t *testing.T) {
 	}
 }
 
-func TestRoleEffortAppliedWhenNoExplicitEffort(t *testing.T) {
-	isolateHome(t)
+// Role effort/skills tests removed — roles are eliminated.
 
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nengine = \"codex\"\nmodel = \"gpt-5.4\"\neffort = \"medium\"\n")
-
-	fs, parsed := newFlagSet(ioDiscard{})
-	args := []string{"--engine", "codex", "--config", cfgPath, "--role", "explorer", "hello"}
-	if err := fs.Parse(args); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags := *parsed
-	positional := fs.Args()
-
-	flagsSet := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) {
-		flagsSet[f.Name] = true
-	})
-
-	spec, err := buildDispatchSpecE(flags, positional)
-	if err != nil {
-		t.Fatalf("buildDispatchSpecE: %v", err)
-	}
-
-	cfgLoaded, err := config.LoadConfig(cfgPath, "")
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	role, err := config.ResolveRole(cfgLoaded, "explorer")
-	if err != nil {
-		t.Fatalf("ResolveRole: %v", err)
-	}
-
-	if !flagsSet["effort"] && !flagsSet["e"] && role.Effort != "" {
-		spec.Effort = role.Effort
-	}
-
-	if spec.Effort != "medium" {
-		t.Errorf("spec.Effort = %q, want %q", spec.Effort, "medium")
-	}
-}
-
-func TestRoleEffortNotAppliedWhenExplicitEffort(t *testing.T) {
-	isolateHome(t)
-
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nengine = \"codex\"\nmodel = \"gpt-5.4\"\neffort = \"medium\"\n")
-
-	fs, parsed := newFlagSet(ioDiscard{})
-	args := []string{"--engine", "codex", "--config", cfgPath, "--role", "explorer", "--effort", "high", "hello"}
-	if err := fs.Parse(args); err != nil {
-		t.Fatalf("parse flags: %v", err)
-	}
-	flags := *parsed
-	positional := fs.Args()
-
-	flagsSet := make(map[string]bool)
-	fs.Visit(func(f *flag.Flag) {
-		flagsSet[f.Name] = true
-	})
-
-	spec, err := buildDispatchSpecE(flags, positional)
-	if err != nil {
-		t.Fatalf("buildDispatchSpecE: %v", err)
-	}
-
-	cfgLoaded, err := config.LoadConfig(cfgPath, "")
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	role, err := config.ResolveRole(cfgLoaded, "explorer")
-	if err != nil {
-		t.Fatalf("ResolveRole: %v", err)
-	}
-
-	if !flagsSet["effort"] && !flagsSet["e"] && role.Effort != "" {
-		spec.Effort = role.Effort
-	}
-
-	if spec.Effort != "high" {
-		t.Errorf("spec.Effort = %q, want %q", spec.Effort, "high")
-	}
-}
-
-func TestRoleSkillsMergedWithCLISkills(t *testing.T) {
-	isolateHome(t)
-
-	cwd := t.TempDir()
-	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
-	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
-
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"pratchett-read\"]\n")
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"preview",
-		"--engine", "codex",
-		"--cwd", cwd,
-		"--config", cfgPath,
-		"--role", "explorer",
-		"--skill", "web-search",
-		"hello",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	raw := decodeJSONMap(t, stdout.Bytes())
-	resultMetadata, ok := raw["result_metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
-	}
-	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
-	want := []string{"web-search", "pratchett-read"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("skills = %#v, want %#v", got, want)
-	}
-}
-
-func TestRoleSkillsRoleOnly(t *testing.T) {
-	isolateHome(t)
-
-	cwd := t.TempDir()
-	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
-	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
-
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"pratchett-read\", \"web-search\"]\n")
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"preview",
-		"--engine", "codex",
-		"--cwd", cwd,
-		"--config", cfgPath,
-		"--role", "explorer",
-		"hello",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	raw := decodeJSONMap(t, stdout.Bytes())
-	resultMetadata, ok := raw["result_metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
-	}
-	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
-	want := []string{"pratchett-read", "web-search"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("skills = %#v, want %#v", got, want)
-	}
-}
-
-func TestRoleSkillsEmpty(t *testing.T) {
-	isolateHome(t)
-
-	cwd := t.TempDir()
-	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
-
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = []\n")
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"preview",
-		"--engine", "codex",
-		"--cwd", cwd,
-		"--config", cfgPath,
-		"--role", "explorer",
-		"--skill", "web-search",
-		"hello",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	raw := decodeJSONMap(t, stdout.Bytes())
-	resultMetadata, ok := raw["result_metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
-	}
-	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
-	want := []string{"web-search"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("skills = %#v, want %#v", got, want)
-	}
-}
-
-func TestRoleSkillsDedup(t *testing.T) {
-	isolateHome(t)
-
-	cwd := t.TempDir()
-	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
-
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"web-search\"]\n")
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{
-		"preview",
-		"--engine", "codex",
-		"--cwd", cwd,
-		"--config", cfgPath,
-		"--role", "explorer",
-		"--skill", "web-search",
-		"hello",
-	}, strings.NewReader(""), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	raw := decodeJSONMap(t, stdout.Bytes())
-	resultMetadata, ok := raw["result_metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
-	}
-	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
-	want := []string{"web-search"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("skills = %#v, want %#v", got, want)
-	}
-}
-
-func TestRoleSkillsStdinMerge(t *testing.T) {
-	isolateHome(t)
-
-	cwd := t.TempDir()
-	writeTestSkillFile(t, cwd, "pratchett-read", "Read Pratchett.")
-	writeTestSkillFile(t, cwd, "web-search", "Use web-search.")
-
-	cfgPath := writeTempConfig(t, "[roles.explorer]\nskills = [\"pratchett-read\"]\n")
-	input := map[string]any{
-		"engine": "codex",
-		"prompt": "from stdin",
-		"cwd":    cwd,
-		"role":   "explorer",
-		"skills": []string{"web-search"},
-	}
-	data, err := json.Marshal(input)
-	if err != nil {
-		t.Fatalf("marshal input: %v", err)
-	}
-
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	exitCode := run([]string{"preview", "--stdin", "--config", cfgPath}, bytes.NewReader(data), &stdout, &stderr)
-	if exitCode != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr=%q stdout=%q", exitCode, stderr.String(), stdout.String())
-	}
-
-	raw := decodeJSONMap(t, stdout.Bytes())
-	resultMetadata, ok := raw["result_metadata"].(map[string]any)
-	if !ok {
-		t.Fatalf("result_metadata = %#v, want object", raw["result_metadata"])
-	}
-	got := stringSliceFromJSONValue(t, resultMetadata["skills"])
-	want := []string{"web-search", "pratchett-read"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("skills = %#v, want %#v", got, want)
-	}
-}
 
 func TestBuildDispatchSpecLeavesEffortEmptyWithoutExplicitFlag(t *testing.T) {
 	t.Parallel()

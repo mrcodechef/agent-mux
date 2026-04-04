@@ -631,7 +631,7 @@ func showResult(dispatchID string, record *dispatch.DispatchRecord, jsonOutput, 
 
 // runWaitCommand blocks until a dispatch completes, emitting periodic status lines.
 //
-// Poll interval precedence: CLI --poll flag > config.toml [async].poll_interval > 60s default.
+// Poll interval precedence: CLI --poll flag > hardcoded 60s default.
 func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 	var flagOutput bytes.Buffer
 	fs := flag.NewFlagSet("agent-mux wait", flag.ContinueOnError)
@@ -639,12 +639,8 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 
 	jsonOutput := false
 	pollInterval := ""
-	configPath := ""
-	cwd := ""
 	fs.BoolVar(&jsonOutput, "json", false, "Emit JSON result when done")
-	fs.StringVar(&pollInterval, "poll", "", "Status poll interval (e.g., 60s, 5m). Default: 60s or [async].poll_interval from config")
-	fs.StringVar(&configPath, "config", "", "Override config path")
-	fs.StringVar(&cwd, "cwd", "", "Working directory for project config discovery")
+	fs.StringVar(&pollInterval, "poll", "", "Status poll interval (e.g., 60s, 5m). Default: 60s")
 
 	if err := fs.Parse(normalizeArgs(args)); err != nil {
 		return handleLifecycleParseError(stdout, &flagOutput, err)
@@ -662,13 +658,9 @@ func runWaitCommand(args []string, stdout, stderr io.Writer) int {
 		return emitLifecycleError(stdout, 1, "not_found", err.Error(), "")
 	}
 
-	// Resolve poll interval: CLI flag > config > hardcoded default.
+	// Resolve poll interval: CLI flag > hardcoded default.
 	interval := config.DefaultAsyncPollInterval
-	if strings.TrimSpace(pollInterval) == "" {
-		// No CLI flag — try config.
-		cfg, _ := config.LoadConfig(configPath, cwd)
-		interval = config.AsyncPollInterval(cfg)
-	} else {
+	if strings.TrimSpace(pollInterval) != "" {
 		var err error
 		interval, err = time.ParseDuration(pollInterval)
 		if err != nil {

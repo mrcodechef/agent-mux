@@ -1,783 +1,168 @@
 package config
 
 import (
-	"bytes"
 	"os"
-	"path/filepath"
-	"reflect"
-	"strings"
 	"testing"
-	"time"
-
-	"github.com/BurntSushi/toml"
 )
 
-func TestDefaultConfig(t *testing.T) {
-	cfg := DefaultConfig()
-
-	if cfg.Defaults.Effort != "high" {
-		t.Fatalf("Defaults.Effort = %q, want %q", cfg.Defaults.Effort, "high")
-	}
-	if cfg.Defaults.Sandbox != "danger-full-access" {
-		t.Fatalf("Defaults.Sandbox = %q, want %q", cfg.Defaults.Sandbox, "danger-full-access")
-	}
-	if cfg.Defaults.PermissionMode != "" {
-		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "")
-	}
-	if cfg.Defaults.MaxDepth != 2 {
-		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 2)
-	}
-	if cfg.Liveness.HeartbeatIntervalSec != 15 {
-		t.Fatalf("Liveness.HeartbeatIntervalSec = %d, want %d", cfg.Liveness.HeartbeatIntervalSec, 15)
-	}
-	if cfg.Liveness.SilenceWarnSeconds != 90 {
-		t.Fatalf("Liveness.SilenceWarnSeconds = %d, want %d", cfg.Liveness.SilenceWarnSeconds, 90)
-	}
-	if cfg.Liveness.SilenceKillSeconds != 180 {
-		t.Fatalf("Liveness.SilenceKillSeconds = %d, want %d", cfg.Liveness.SilenceKillSeconds, 180)
-	}
-	if cfg.Timeout.Low != 120 {
-		t.Fatalf("Timeout.Low = %d, want %d", cfg.Timeout.Low, 120)
-	}
-	if cfg.Timeout.Medium != 600 {
-		t.Fatalf("Timeout.Medium = %d, want %d", cfg.Timeout.Medium, 600)
-	}
-	if cfg.Timeout.High != 1800 {
-		t.Fatalf("Timeout.High = %d, want %d", cfg.Timeout.High, 1800)
-	}
-	if cfg.Timeout.XHigh != 2700 {
-		t.Fatalf("Timeout.XHigh = %d, want %d", cfg.Timeout.XHigh, 2700)
-	}
-	if cfg.Timeout.Grace != 60 {
-		t.Fatalf("Timeout.Grace = %d, want %d", cfg.Timeout.Grace, 60)
-	}
-}
-
-func TestLoadFromTOML(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-
-	content := `
-[defaults]
-engine = "codex"
-model = "gpt-5.4"
-effort = "medium"
-sandbox = "workspace-write"
-permission_mode = "default"
-max_depth = 5
-
-[models]
-codex = ["gpt-5.4", "gpt-5.4-mini"]
-
-[roles.reviewer]
-engine = "claude"
-model = "claude-sonnet-4-6"
-effort = "high"
-
-[liveness]
-heartbeat_interval_sec = 30
-silence_warn_seconds = 120
-silence_kill_seconds = 240
-
-[timeout]
-low = 30
-medium = 300
-high = 900
-xhigh = 1200
-grace = 15
-
-[hooks]
-pre_dispatch = ["./hooks/pre-dispatch.sh", "./hooks/common.sh"]
-on_event = ["./hooks/on-event.sh"]
-event_deny_action = "warn"
-`
-
-	if err := os.WriteFile(path, []byte(strings.TrimSpace(content)), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	cfg, err := LoadConfig(path, dir)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	if cfg.Defaults.Engine != "codex" {
-		t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "codex")
-	}
-	if cfg.Defaults.Model != "gpt-5.4" {
-		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "gpt-5.4")
-	}
-	if cfg.Defaults.Effort != "medium" {
-		t.Fatalf("Defaults.Effort = %q, want %q", cfg.Defaults.Effort, "medium")
-	}
-	if cfg.Defaults.Sandbox != "workspace-write" {
-		t.Fatalf("Defaults.Sandbox = %q, want %q", cfg.Defaults.Sandbox, "workspace-write")
-	}
-	if cfg.Defaults.PermissionMode != "default" {
-		t.Fatalf("Defaults.PermissionMode = %q, want %q", cfg.Defaults.PermissionMode, "default")
-	}
-	if cfg.Defaults.MaxDepth != 5 {
-		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 5)
-	}
-
-	if got := cfg.Models["codex"]; len(got) != 2 || got[0] != "gpt-5.4" || got[1] != "gpt-5.4-mini" {
-		t.Fatalf("Models[codex] = %#v, want %#v", got, []string{"gpt-5.4", "gpt-5.4-mini"})
-	}
-
-	role, ok := cfg.Roles["reviewer"]
-	if !ok {
-		t.Fatal("Roles[reviewer] missing")
-	}
-	if role.Engine != "claude" || role.Model != "claude-sonnet-4-6" || role.Effort != "high" {
-		t.Fatalf("Roles[reviewer] = %#v, want engine/model/effort set", role)
-	}
-
-	if cfg.Liveness.HeartbeatIntervalSec != 30 {
-		t.Fatalf("Liveness.HeartbeatIntervalSec = %d, want %d", cfg.Liveness.HeartbeatIntervalSec, 30)
-	}
-	if cfg.Liveness.SilenceWarnSeconds != 120 {
-		t.Fatalf("Liveness.SilenceWarnSeconds = %d, want %d", cfg.Liveness.SilenceWarnSeconds, 120)
-	}
-	if cfg.Liveness.SilenceKillSeconds != 240 {
-		t.Fatalf("Liveness.SilenceKillSeconds = %d, want %d", cfg.Liveness.SilenceKillSeconds, 240)
-	}
-	if cfg.Timeout.Low != 30 || cfg.Timeout.Medium != 300 || cfg.Timeout.High != 900 || cfg.Timeout.XHigh != 1200 || cfg.Timeout.Grace != 15 {
-		t.Fatalf("Timeout = %#v, want low=30 medium=300 high=900 xhigh=1200 grace=15", cfg.Timeout)
-	}
-
-	if len(cfg.Hooks.PreDispatch) != 2 || cfg.Hooks.PreDispatch[0] != "./hooks/pre-dispatch.sh" || cfg.Hooks.PreDispatch[1] != "./hooks/common.sh" {
-		t.Fatalf("Hooks.PreDispatch = %#v, want %#v", cfg.Hooks.PreDispatch, []string{"./hooks/pre-dispatch.sh", "./hooks/common.sh"})
-	}
-	if len(cfg.Hooks.OnEvent) != 1 || cfg.Hooks.OnEvent[0] != "./hooks/on-event.sh" {
-		t.Fatalf("Hooks.OnEvent = %#v, want %#v", cfg.Hooks.OnEvent, []string{"./hooks/on-event.sh"})
-	}
-	if cfg.Hooks.EventDenyAction != "warn" {
-		t.Fatalf("Hooks.EventDenyAction = %q, want %q", cfg.Hooks.EventDenyAction, "warn")
-	}
-}
-
-func TestPrecedence(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-
-	globalDir := filepath.Join(home, ".agent-mux")
-	if err := os.MkdirAll(globalDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll global: %v", err)
-	}
-	projectDir := filepath.Join(cwd, ".agent-mux")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll project: %v", err)
-	}
-
-	globalConfig := `
-[defaults]
-engine = "claude"
-model = "claude-sonnet-4-6"
-max_depth = 4
-
-[timeout]
-medium = 700
-`
-	projectConfig := `
-[defaults]
-model = "gpt-5.4"
-max_depth = 9
-
-[liveness]
-silence_warn_seconds = 45
-`
-
-	globalPath := filepath.Join(globalDir, "config.toml")
-	projectPath := filepath.Join(projectDir, "config.toml")
-	if err := os.WriteFile(globalPath, []byte(strings.TrimSpace(globalConfig)), 0o644); err != nil {
-		t.Fatalf("WriteFile global: %v", err)
-	}
-	if err := os.WriteFile(projectPath, []byte(strings.TrimSpace(projectConfig)), 0o644); err != nil {
-		t.Fatalf("WriteFile project: %v", err)
-	}
-
-	cfg, err := LoadConfig("", cwd)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	if cfg.Defaults.Engine != "claude" {
-		t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "claude")
-	}
-	if cfg.Defaults.Model != "gpt-5.4" {
-		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "gpt-5.4")
-	}
-	if cfg.Defaults.MaxDepth != 9 {
-		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 9)
-	}
-	if cfg.Defaults.Effort != "high" {
-		t.Fatalf("Defaults.Effort = %q, want %q", cfg.Defaults.Effort, "high")
-	}
-	if cfg.Timeout.Medium != 700 {
-		t.Fatalf("Timeout.Medium = %d, want %d", cfg.Timeout.Medium, 700)
-	}
-	if cfg.Liveness.SilenceWarnSeconds != 45 {
-		t.Fatalf("Liveness.SilenceWarnSeconds = %d, want %d", cfg.Liveness.SilenceWarnSeconds, 45)
-	}
-	if cfg.Timeout.High != 1800 {
-		t.Fatalf("Timeout.High = %d, want default %d", cfg.Timeout.High, 1800)
-	}
-}
-
-func TestLoadConfigRejectsNonPositiveTimeoutValues(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{
-			name: "timeout low",
-			content: `
-[timeout]
-low = 0
-`,
-			want: "timeout.low",
-		},
-		{
-			name: "timeout grace",
-			content: `
-[timeout]
-grace = -1
-`,
-			want: "timeout.grace",
-		},
-		{
-			name: "role timeout",
-			content: `
-[roles.reviewer]
-timeout = 0
-`,
-			want: "roles.reviewer.timeout",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, strings.ReplaceAll(tt.name, " ", "-")+".toml")
-			if err := os.WriteFile(path, []byte(strings.TrimSpace(tt.content)), 0o644); err != nil {
-				t.Fatalf("WriteFile(%q): %v", path, err)
-			}
-
-			_, err := LoadConfig(path, dir)
-			if err == nil {
-				t.Fatal("LoadConfig error = nil, want validation error")
-			}
-			if !IsValidationError(err) {
-				t.Fatalf("error = %T %v, want validation error", err, err)
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %q, want field %q", err, tt.want)
-			}
-		})
-	}
-}
-
-func TestPrecedenceAcrossGlobalAndProjectConfigs(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-
-	globalDir := filepath.Join(home, ".agent-mux")
-	if err := os.MkdirAll(globalDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll global: %v", err)
-	}
-	projectDir := filepath.Join(cwd, ".agent-mux")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll project: %v", err)
-	}
-
-	globalConfig := `
-[defaults]
-engine = "claude"
-max_depth = 4
-
-[roles.reviewer]
-model = "global-role-model"
-skills = ["global-skill"]
-
-[timeout]
-medium = 700
-`
-	projectConfig := `
-[defaults]
-model = "project-model"
-max_depth = 9
-
-[roles.reviewer]
-engine = "codex"
-skills = ["project-skill"]
-system_prompt_file = "prompts/reviewer.md"
-
-[liveness]
-silence_warn_seconds = 45
-`
-
-	files := map[string]string{
-		filepath.Join(globalDir, "config.toml"):  globalConfig,
-		filepath.Join(projectDir, "config.toml"): projectConfig,
-	}
-	for path, content := range files {
-		if err := os.WriteFile(path, []byte(strings.TrimSpace(content)), 0o644); err != nil {
-			t.Fatalf("WriteFile %s: %v", path, err)
-		}
-	}
-
-	cfg, err := LoadConfig("", cwd)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	if cfg.Defaults.Engine != "claude" {
-		t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "claude")
-	}
-	if cfg.Defaults.Model != "project-model" {
-		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "project-model")
-	}
-	if cfg.Defaults.MaxDepth != 9 {
-		t.Fatalf("Defaults.MaxDepth = %d, want %d", cfg.Defaults.MaxDepth, 9)
-	}
-	if cfg.Timeout.Medium != 700 {
-		t.Fatalf("Timeout.Medium = %d, want %d", cfg.Timeout.Medium, 700)
-	}
-	if cfg.Liveness.SilenceWarnSeconds != 45 {
-		t.Fatalf("Liveness.SilenceWarnSeconds = %d, want %d", cfg.Liveness.SilenceWarnSeconds, 45)
-	}
-
-	role, ok := cfg.Roles["reviewer"]
-	if !ok {
-		t.Fatal("Roles[reviewer] missing")
-	}
-	if role.Engine != "codex" {
-		t.Fatalf("Roles[reviewer].Engine = %q, want %q", role.Engine, "codex")
-	}
-	if role.Model != "global-role-model" {
-		t.Fatalf("Roles[reviewer].Model = %q, want %q", role.Model, "global-role-model")
-	}
-	if !reflect.DeepEqual(role.Skills, []string{"project-skill"}) {
-		t.Fatalf("Roles[reviewer].Skills = %#v, want %#v", role.Skills, []string{"project-skill"})
-	}
-	if role.SystemPromptFile != "prompts/reviewer.md" {
-		t.Fatalf("Roles[reviewer].SystemPromptFile = %q, want %q", role.SystemPromptFile, "prompts/reviewer.md")
-	}
-	if role.SourceDir != projectDir {
-		t.Fatalf("Roles[reviewer].SourceDir = %q, want %q", role.SourceDir, projectDir)
-	}
-}
-
-// TestExplicitConfigFileIsSoleSource verifies that --config with a .toml path
-// bypasses global + project config lookup.
-func TestExplicitConfigFileIsSoleSource(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	cwd := t.TempDir()
-
-	// Global: engine=claude, model=global-model
-	globalDir := filepath.Join(home, ".agent-mux")
-	if err := os.MkdirAll(globalDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll global: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(globalDir, "config.toml"), []byte("[defaults]\nengine = \"claude\"\nmodel = \"global-model\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile global: %v", err)
-	}
-
-	// Project: model=project-model
-	projectDir := filepath.Join(cwd, ".agent-mux")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatalf("MkdirAll project: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(projectDir, "config.toml"), []byte("[defaults]\nmodel = \"project-model\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile project: %v", err)
-	}
-
-	// Explicit: model=explicit-model
-	explicitDir := t.TempDir()
-	explicitPath := filepath.Join(explicitDir, "override.toml")
-	if err := os.WriteFile(explicitPath, []byte("[defaults]\nmodel = \"explicit-model\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile explicit: %v", err)
-	}
-
-	cfg, err := LoadConfig(explicitPath, cwd)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	if cfg.Defaults.Engine != "" {
-		t.Fatalf("Defaults.Engine = %q, want empty default when --config is sole source", cfg.Defaults.Engine)
-	}
-	if cfg.Defaults.Model != "explicit-model" {
-		t.Fatalf("Defaults.Model = %q, want %q", cfg.Defaults.Model, "explicit-model")
-	}
-}
-
-// TestExplicitConfigDirectoryMode verifies that --config with a directory resolves
-// to the config.toml or .agent-mux/config.toml inside it.
-func TestExplicitConfigDirectoryMode(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-
-	t.Run("dot-agent-mux-subdir", func(t *testing.T) {
-		dir := t.TempDir()
-		subDir := filepath.Join(dir, ".agent-mux")
-		if err := os.MkdirAll(subDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(subDir, "config.toml"), []byte("[defaults]\nengine = \"codex\"\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-
-		cfg, err := LoadConfig(dir, dir)
-		if err != nil {
-			t.Fatalf("LoadConfig: %v", err)
-		}
-		if cfg.Defaults.Engine != "codex" {
-			t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "codex")
-		}
-	})
-
-	t.Run("flat-config-toml", func(t *testing.T) {
-		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte("[defaults]\nengine = \"claude\"\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-
-		cfg, err := LoadConfig(dir, dir)
-		if err != nil {
-			t.Fatalf("LoadConfig: %v", err)
-		}
-		if cfg.Defaults.Engine != "claude" {
-			t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "claude")
-		}
-	})
-
-	t.Run("is-agent-mux-dir-itself", func(t *testing.T) {
-		parent := t.TempDir()
-		agentMuxDir := filepath.Join(parent, ".agent-mux")
-		if err := os.MkdirAll(agentMuxDir, 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
-		}
-		if err := os.WriteFile(filepath.Join(agentMuxDir, "config.toml"), []byte("[defaults]\nengine = \"codex\"\n"), 0o644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
-		}
-
-		// Pass the .agent-mux dir itself as --config.
-		cfg, err := LoadConfig(agentMuxDir, parent)
-		if err != nil {
-			t.Fatalf("LoadConfig: %v", err)
-		}
-		if cfg.Defaults.Engine != "codex" {
-			t.Fatalf("Defaults.Engine = %q, want %q", cfg.Defaults.Engine, "codex")
-		}
-	})
-
-	t.Run("empty-dir-errors", func(t *testing.T) {
-		dir := t.TempDir()
-		_, err := LoadConfig(dir, dir)
-		if err == nil {
-			t.Fatal("LoadConfig(empty dir) error = nil, want error")
-		}
-		if !strings.Contains(err.Error(), "no config.toml") {
-			t.Fatalf("error = %q, want 'no config.toml' message", err.Error())
-		}
-	})
-}
-
-func TestModelOverridesAreAdditiveUnion(t *testing.T) {
-	base := DefaultConfig()
-	base.Models["codex"] = []string{"old-a", "old-b"}
-	overlay := &Config{Models: map[string][]string{"codex": {"new-a", "old-b"}}}
-
-	mergeConfig(base, overlay)
-
-	got := base.Models["codex"]
-	want := []string{"old-a", "old-b", "new-a"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("Models[codex] = %#v, want %#v (union, deduplicated)", got, want)
-	}
-}
-
-func TestRoleResolution(t *testing.T) {
-	cfg := &Config{
-		Roles: map[string]RoleConfig{
-			"builder": {
-				Engine: "codex",
-				Model:  "gpt-5.4",
-				Effort: "high",
-			},
-			"reviewer": {
-				Engine: "claude",
-				Model:  "claude-sonnet-4-6",
-				Effort: "medium",
-			},
-		},
-	}
-
-	role, err := ResolveRole(cfg, "builder")
-	if err != nil {
-		t.Fatalf("ResolveRole(builder): %v", err)
-	}
-	if role.Engine != "codex" || role.Model != "gpt-5.4" || role.Effort != "high" {
-		t.Fatalf("resolved role = %#v, want builder config", role)
-	}
-
-	_, err = ResolveRole(cfg, "missing")
-	if err == nil {
-		t.Fatal("ResolveRole(missing) error = nil, want error")
-	}
-	if !strings.Contains(err.Error(), `Available roles: [builder reviewer]`) {
-		t.Fatalf("ResolveRole(missing) error = %q, want available roles list", err)
-	}
-}
-
-func TestRoleConfigSkillsRoundTrip(t *testing.T) {
-	role := RoleConfig{
-		Engine:           "codex",
-		Model:            "gpt-5.4",
-		Effort:           "medium",
-		Timeout:          1800,
-		Skills:           []string{"web-search", "pratchett-read"},
-		SystemPromptFile: "prompts/reviewer.md",
-	}
-
-	var buf bytes.Buffer
-	if err := toml.NewEncoder(&buf).Encode(role); err != nil {
-		t.Fatalf("Encode: %v", err)
-	}
-
-	var decoded RoleConfig
-	if _, err := toml.Decode(buf.String(), &decoded); err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-
-	if !reflect.DeepEqual(decoded, role) {
-		t.Fatalf("decoded role = %#v, want %#v", decoded, role)
-	}
-}
-
-func TestLoadConfigSetsRoleSourceDir(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(path, []byte("[roles.lifter]\nengine = \"codex\"\n"), 0o644); err != nil {
-		t.Fatalf("WriteFile: %v", err)
-	}
-
-	cfg, err := LoadConfig(path, dir)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	if got := cfg.Roles["lifter"].SourceDir; got != dir {
-		t.Fatalf("SourceDir = %q, want %q", got, dir)
-	}
-}
-
-func TestMergeConfigMergesRolesAcrossFiles(t *testing.T) {
-	base := DefaultConfig()
-	base.meta = &toml.MetaData{}
-	base.Roles["lifter"] = RoleConfig{
-		Engine:           "codex",
-		Model:            "gpt-5.4",
-		Effort:           "high",
-		Timeout:          1800,
-		Skills:           []string{"pratchett-read"},
-		SystemPromptFile: "prompts/lifter.md",
-		SourceDir:        "/base",
-	}
-
-	var overlay Config
-	meta, err := toml.Decode(`
-[roles.lifter]
-model = "gpt-5.4-mini"
-skills = ["build"]
-system_prompt_file = "prompts/lifter-override.md"
-`, &overlay)
-	if err != nil {
-		t.Fatalf("Decode: %v", err)
-	}
-	overlay.meta = &meta
-	role := overlay.Roles["lifter"]
-	role.SourceDir = "/overlay"
-	overlay.Roles["lifter"] = role
-
-	mergeConfig(base, &overlay)
-
-	got := base.Roles["lifter"]
-	if got.Engine != "codex" || got.Effort != "high" || got.Timeout != 1800 {
-		t.Fatalf("merged role = %#v, want original engine/effort/timeout preserved", got)
-	}
-	if got.Model != "gpt-5.4-mini" {
-		t.Fatalf("Model = %q, want %q", got.Model, "gpt-5.4-mini")
-	}
-	if !reflect.DeepEqual(got.Skills, []string{"build"}) {
-		t.Fatalf("Skills = %#v, want %#v", got.Skills, []string{"build"})
-	}
-	if got.SystemPromptFile != "prompts/lifter-override.md" {
-		t.Fatalf("SystemPromptFile = %q, want %q", got.SystemPromptFile, "prompts/lifter-override.md")
-	}
-	if got.SourceDir != "/overlay" {
-		t.Fatalf("SourceDir = %q, want %q", got.SourceDir, "/overlay")
-	}
-}
-
-func TestLoadConfigRejectsNegativeTimeoutValues(t *testing.T) {
-	dir := t.TempDir()
-
-	tests := []struct {
-		name    string
-		content string
-		want    string
-	}{
-		{
-			name: "negative low",
-			content: `
-[timeout]
-low = -10
-`,
-			want: "timeout.low",
-		},
-		{
-			name: "negative medium",
-			content: `
-[timeout]
-medium = -1
-`,
-			want: "timeout.medium",
-		},
-		{
-			name: "negative high",
-			content: `
-[timeout]
-high = -100
-`,
-			want: "timeout.high",
-		},
-		{
-			name: "negative xhigh",
-			content: `
-[timeout]
-xhigh = -5
-`,
-			want: "timeout.xhigh",
-		},
-		{
-			name: "negative role timeout",
-			content: `
-[roles.slow]
-timeout = -30
-`,
-			want: "roles.slow.timeout",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(dir, "neg-"+strings.ReplaceAll(tt.name, " ", "-")+".toml")
-			if err := os.WriteFile(path, []byte(strings.TrimSpace(tt.content)), 0o644); err != nil {
-				t.Fatalf("WriteFile(%q): %v", path, err)
-			}
-
-			_, err := LoadConfig(path, dir)
-			if err == nil {
-				t.Fatal("LoadConfig error = nil, want validation error")
-			}
-			if !IsValidationError(err) {
-				t.Fatalf("error = %T %v, want ValidationError", err, err)
-			}
-			if !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("error = %q, want field %q", err, tt.want)
-			}
-		})
-	}
-}
-
 func TestTimeoutForEffort(t *testing.T) {
-	cfg := &Config{
-		Timeout: TimeoutConfig{
-			Low:    10,
-			Medium: 20,
-			High:   30,
-			XHigh:  40,
-		},
+	tests := []struct {
+		effort string
+		want   int
+	}{
+		{"low", 60},
+		{"medium", 300},
+		{"high", 900},
+		{"xhigh", 1800},
+		{"unknown", 900}, // defaults to high
+		{"HIGH", 900},    // case insensitive
+		{"  high  ", 900},
 	}
 
-	if got := TimeoutForEffort(cfg, "low"); got != 10 {
-		t.Fatalf("TimeoutForEffort(low) = %d, want %d", got, 10)
-	}
-	if got := TimeoutForEffort(cfg, "medium"); got != 20 {
-		t.Fatalf("TimeoutForEffort(medium) = %d, want %d", got, 20)
-	}
-	if got := TimeoutForEffort(cfg, "high"); got != 30 {
-		t.Fatalf("TimeoutForEffort(high) = %d, want %d", got, 30)
-	}
-	if got := TimeoutForEffort(cfg, "xhigh"); got != 40 {
-		t.Fatalf("TimeoutForEffort(xhigh) = %d, want %d", got, 40)
-	}
-	if got := TimeoutForEffort(cfg, "unknown"); got != 30 {
-		t.Fatalf("TimeoutForEffort(unknown) = %d, want fallback %d", got, 30)
+	for _, tt := range tests {
+		got := TimeoutForEffort(tt.effort)
+		if got != tt.want {
+			t.Errorf("TimeoutForEffort(%q) = %d, want %d", tt.effort, got, tt.want)
+		}
 	}
 }
 
-func TestAsyncPollIntervalDefaults(t *testing.T) {
-	// nil config returns hardcoded default.
-	if got := AsyncPollInterval(nil); got != DefaultAsyncPollInterval {
-		t.Fatalf("AsyncPollInterval(nil) = %v, want %v", got, DefaultAsyncPollInterval)
-	}
-	// Empty config returns hardcoded default.
-	cfg := DefaultConfig()
-	if got := AsyncPollInterval(cfg); got != DefaultAsyncPollInterval {
-		t.Fatalf("AsyncPollInterval(empty) = %v, want %v", got, DefaultAsyncPollInterval)
+func TestGraceSec(t *testing.T) {
+	if got := GraceSec(); got != 60 {
+		t.Fatalf("GraceSec() = %d, want 60", got)
 	}
 }
 
-func TestAsyncPollIntervalFromConfig(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Async.PollInterval = "10s"
-	got := AsyncPollInterval(cfg)
-	if got != 10*time.Second {
-		t.Fatalf("AsyncPollInterval(10s) = %v, want 10s", got)
+func TestMaxDepthDefault(t *testing.T) {
+	t.Setenv("AGENT_MUX_MAX_DEPTH", "")
+	if got := MaxDepth(); got != 2 {
+		t.Fatalf("MaxDepth() = %d, want 2", got)
 	}
 }
 
-func TestAsyncPollIntervalInvalidFallback(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Async.PollInterval = "not-a-duration"
-	got := AsyncPollInterval(cfg)
-	if got != DefaultAsyncPollInterval {
-		t.Fatalf("AsyncPollInterval(invalid) = %v, want default %v", got, DefaultAsyncPollInterval)
+func TestMaxDepthEnv(t *testing.T) {
+	t.Setenv("AGENT_MUX_MAX_DEPTH", "5")
+	if got := MaxDepth(); got != 5 {
+		t.Fatalf("MaxDepth() = %d, want 5", got)
 	}
 }
 
-func TestAsyncPollIntervalMinimum(t *testing.T) {
-	cfg := DefaultConfig()
-	cfg.Async.PollInterval = "100ms"
-	got := AsyncPollInterval(cfg)
-	// Sub-second values should fall back to default.
-	if got != DefaultAsyncPollInterval {
-		t.Fatalf("AsyncPollInterval(100ms) = %v, want default %v (sub-second rejected)", got, DefaultAsyncPollInterval)
+func TestMaxDepthInvalidEnv(t *testing.T) {
+	t.Setenv("AGENT_MUX_MAX_DEPTH", "not-a-number")
+	if got := MaxDepth(); got != 2 {
+		t.Fatalf("MaxDepth(invalid) = %d, want default 2", got)
 	}
 }
 
-func TestAsyncPollIntervalMerge(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.toml")
-	if err := os.WriteFile(cfgPath, []byte("[async]\npoll_interval = \"30s\"\n"), 0644); err != nil {
-		t.Fatal(err)
+func TestPermissionModeDefault(t *testing.T) {
+	t.Setenv("AGENT_MUX_PERMISSION_MODE", "")
+	if got := PermissionMode(); got != "" {
+		t.Fatalf("PermissionMode() = %q, want empty", got)
 	}
-	cfg, err := LoadConfig(cfgPath, "")
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
+}
+
+func TestPermissionModeEnv(t *testing.T) {
+	t.Setenv("AGENT_MUX_PERMISSION_MODE", "default")
+	if got := PermissionMode(); got != "default" {
+		t.Fatalf("PermissionMode() = %q, want %q", got, "default")
 	}
-	if cfg.Async.PollInterval != "30s" {
-		t.Fatalf("Async.PollInterval = %q, want %q", cfg.Async.PollInterval, "30s")
+}
+
+func TestHeartbeatIntervalSecDefault(t *testing.T) {
+	t.Setenv("AGENT_MUX_HEARTBEAT_INTERVAL_SEC", "")
+	if got := HeartbeatIntervalSec(); got != 15 {
+		t.Fatalf("HeartbeatIntervalSec() = %d, want 15", got)
 	}
-	got := AsyncPollInterval(cfg)
-	if got != 30*time.Second {
-		t.Fatalf("AsyncPollInterval = %v, want 30s", got)
+}
+
+func TestHeartbeatIntervalSecEnv(t *testing.T) {
+	t.Setenv("AGENT_MUX_HEARTBEAT_INTERVAL_SEC", "30")
+	if got := HeartbeatIntervalSec(); got != 30 {
+		t.Fatalf("HeartbeatIntervalSec() = %d, want 30", got)
+	}
+}
+
+func TestSilenceWarnSecondsDefault(t *testing.T) {
+	t.Setenv("AGENT_MUX_SILENCE_WARN_SECONDS", "")
+	if got := SilenceWarnSeconds(); got != 90 {
+		t.Fatalf("SilenceWarnSeconds() = %d, want 90", got)
+	}
+}
+
+func TestSilenceKillSecondsDefault(t *testing.T) {
+	t.Setenv("AGENT_MUX_SILENCE_KILL_SECONDS", "")
+	if got := SilenceKillSeconds(); got != 180 {
+		t.Fatalf("SilenceKillSeconds() = %d, want 180", got)
+	}
+}
+
+func TestDefaultModels(t *testing.T) {
+	models := DefaultModels()
+	if len(models["codex"]) == 0 {
+		t.Fatal("DefaultModels() missing codex models")
+	}
+	if len(models["claude"]) == 0 {
+		t.Fatal("DefaultModels() missing claude models")
+	}
+	if len(models["gemini"]) == 0 {
+		t.Fatal("DefaultModels() missing gemini models")
+	}
+}
+
+func TestValidationError(t *testing.T) {
+	err := &ValidationError{Field: "timeout", Source: "test.md", Value: -1}
+	if !IsValidationError(err) {
+		t.Fatal("IsValidationError should return true")
+	}
+	if err.Error() == "" {
+		t.Fatal("ValidationError.Error() should not be empty")
+	}
+}
+
+func TestDeduplicateStrings(t *testing.T) {
+	got := deduplicateStrings([]string{"a", "b", "a", "c", "b"})
+	want := []string{"a", "b", "c"}
+	if len(got) != len(want) {
+		t.Fatalf("deduplicateStrings = %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("deduplicateStrings[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDeduplicateStringsNil(t *testing.T) {
+	got := deduplicateStrings(nil)
+	if got != nil {
+		t.Fatalf("deduplicateStrings(nil) = %v, want nil", got)
+	}
+}
+
+func TestEnvInt(t *testing.T) {
+	key := "AGENT_MUX_TEST_INT_" + t.Name()
+	defer os.Unsetenv(key)
+
+	// Unset -> default
+	if got := envInt(key, 42); got != 42 {
+		t.Fatalf("envInt(unset) = %d, want 42", got)
+	}
+
+	// Valid
+	os.Setenv(key, "10")
+	if got := envInt(key, 42); got != 10 {
+		t.Fatalf("envInt(10) = %d, want 10", got)
+	}
+
+	// Invalid -> default
+	os.Setenv(key, "abc")
+	if got := envInt(key, 42); got != 42 {
+		t.Fatalf("envInt(abc) = %d, want 42", got)
+	}
+
+	// Zero -> default (must be > 0)
+	os.Setenv(key, "0")
+	if got := envInt(key, 42); got != 42 {
+		t.Fatalf("envInt(0) = %d, want 42", got)
 	}
 }

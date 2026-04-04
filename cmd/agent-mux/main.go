@@ -64,13 +64,13 @@ func (s *stringSlice) Set(value string) error {
 }
 
 type cliFlags struct {
-	engine, role, profile, cwd, model, effort, systemPrompt, systemPromptFile string
-	contextFile, artifactDir, config, promptFile, recover                     string
-	signal                                                                    string
-	permissionMode, sandbox, reasoning                                        string
-	timeout, maxDepth, maxTurns                                               int
-	full, noFull, skipSkills, stdin, version, verbose, yes, stream, async     bool
-	skills, addDirs                                                           stringSlice
+	engine, profile, cwd, model, effort, systemPrompt, systemPromptFile string
+	contextFile, artifactDir, promptFile, recover                       string
+	signal                                                              string
+	permissionMode, sandbox, reasoning                                  string
+	timeout, maxDepth, maxTurns                                         int
+	full, noFull, skipSkills, stdin, version, verbose, yes, stream, async bool
+	skills, addDirs                                                      stringSlice
 }
 
 type previewResult struct {
@@ -101,7 +101,6 @@ type previewDispatchSpec struct {
 }
 
 type previewResultMeta struct {
-	Role    string   `json:"role,omitempty"`
 	Profile string   `json:"profile,omitempty"`
 	Skills  []string `json:"skills,omitempty"`
 }
@@ -269,11 +268,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	}
 	spec := req.DispatchSpec
 
-	cfg, err := config.LoadConfig(flags.config, spec.Cwd)
-	if err != nil {
-		return emitFailureResult(stdout, spec, 1, configFailureCode(err), fmt.Sprintf("load config: %v", err), "")
-	}
-
 	applyPreset := func(engine, model, effort string) {
 		if !flagsSet["engine"] && !flagsSet["E"] && engine != "" {
 			spec.Engine = engine
@@ -283,17 +277,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		}
 		if !flagsSet["effort"] && !flagsSet["e"] && effort != "" {
 			spec.Effort = effort
-		}
-	}
-	applyDefaults := func() {
-		if spec.Engine == "" {
-			spec.Engine = cfg.Defaults.Engine
-		}
-		if spec.Model == "" {
-			spec.Model = cfg.Defaults.Model
-		}
-		if spec.Effort == "" {
-			spec.Effort = cfg.Defaults.Effort
 		}
 	}
 
@@ -325,60 +308,18 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		req.DispatchAnnotations.Skills = append(coordSpec.Skills, req.DispatchAnnotations.Skills...)
 	}
 
-	roleName := flags.role
-	if flags.stdin {
-		roleName = req.DispatchAnnotations.Role
-	}
-	// roleConfigDir is the directory of the config file that defined the active
-	// role. It is used as a fallback skill search root when spec.Cwd does not
-	// contain the skill (Bug 2 fix).
-	var roleConfigDir string
-	if roleName != "" {
-		role, err := config.ResolveRole(cfg, roleName)
-		if err != nil {
-			return failResult(spec, "config_error", err.Error(), "")
-		}
-		if flags.stdin {
-			if spec.Engine == "" && role.Engine != "" {
-				spec.Engine = role.Engine
-			}
-			if spec.Model == "" && role.Model != "" {
-				spec.Model = role.Model
-			}
-			if spec.Effort == "" && role.Effort != "" {
-				spec.Effort = role.Effort
-			}
-			if spec.TimeoutSec == 0 && role.Timeout > 0 {
-				spec.TimeoutSec = role.Timeout
-			}
-		} else {
-			applyPreset(role.Engine, role.Model, role.Effort)
-			if !flagsSet["timeout"] && !flagsSet["t"] && role.Timeout > 0 {
-				spec.TimeoutSec = role.Timeout
-			}
-		}
-		roleSystemPrompt, err := loadSystemPromptFile(role.SourceDir, role.SystemPromptFile)
-		if err != nil {
-			return failResult(spec, "config_error", err.Error(), "")
-		}
-		spec.SystemPrompt = prependSystemPrompt(roleSystemPrompt, spec.SystemPrompt)
-		req.DispatchAnnotations.Skills = mergeSkills(role.Skills, req.DispatchAnnotations.Skills)
-		req.DispatchAnnotations.Role = roleName
-		roleConfigDir = role.SourceDir
-	}
-
-	applyDefaults()
+	// Apply hardcoded defaults.
 	if spec.Effort == "" {
 		spec.Effort = "high"
 	}
 	if spec.MaxDepth == 0 {
-		spec.MaxDepth = cfg.Defaults.MaxDepth
+		spec.MaxDepth = config.MaxDepth()
 	}
 	if spec.TimeoutSec == 0 {
-		spec.TimeoutSec = config.TimeoutForEffort(cfg, spec.Effort)
+		spec.TimeoutSec = config.TimeoutForEffort(spec.Effort)
 	}
 	if spec.GraceSec == 0 {
-		spec.GraceSec = cfg.Timeout.Grace
+		spec.GraceSec = config.GraceSec()
 	}
 	if err := validateResolvedDispatchTimeouts(spec); err != nil {
 		return failResult(spec, "invalid_input", err.Error(), "")
@@ -387,26 +328,27 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if spec.EngineOpts == nil {
 		spec.EngineOpts = map[string]any{}
 	}
-	// Per-dispatch engine_opts take precedence over config defaults.
-	// Only apply config defaults when the dispatch spec doesn't set them.
+	// Apply liveness defaults (hardcoded + env) when not set by dispatch spec.
 	if _, ok := spec.EngineOpts["heartbeat_interval_sec"]; !ok {
-		spec.EngineOpts["heartbeat_interval_sec"] = cfg.Liveness.HeartbeatIntervalSec
+		spec.EngineOpts["heartbeat_interval_sec"] = config.HeartbeatIntervalSec()
 	}
 	if _, ok := spec.EngineOpts["silence_warn_seconds"]; !ok {
-		spec.EngineOpts["silence_warn_seconds"] = cfg.Liveness.SilenceWarnSeconds
+		spec.EngineOpts["silence_warn_seconds"] = config.SilenceWarnSeconds()
 	}
 	if _, ok := spec.EngineOpts["silence_kill_seconds"]; !ok {
-		spec.EngineOpts["silence_kill_seconds"] = cfg.Liveness.SilenceKillSeconds
+		spec.EngineOpts["silence_kill_seconds"] = config.SilenceKillSeconds()
 	}
-	// Apply default permission mode from config if not set by CLI.
+	// Apply default permission mode from env if not set by CLI.
 	if _, ok := spec.EngineOpts["permission-mode"]; !ok || spec.EngineOpts["permission-mode"] == "" {
-		if !flagsSet["permission-mode"] && cfg.Defaults.PermissionMode != "" {
-			spec.EngineOpts["permission-mode"] = cfg.Defaults.PermissionMode
+		if !flagsSet["permission-mode"] {
+			if pm := config.PermissionMode(); pm != "" {
+				spec.EngineOpts["permission-mode"] = pm
+			}
 		}
 	}
 
 	if len(req.DispatchAnnotations.Skills) > 0 && !req.SkipSkills {
-		skillPrompt, pathDirs, err := config.LoadSkills(req.DispatchAnnotations.Skills, spec.Cwd, roleConfigDir, cfg.Skills.SearchPaths, roleName)
+		skillPrompt, pathDirs, err := config.LoadSkills(req.DispatchAnnotations.Skills, spec.Cwd, profileName)
 		if err != nil {
 			return failResult(spec, "config_error", err.Error(), "")
 		}
@@ -444,7 +386,7 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		spec.Prompt = dispatch.BuildRecoveryPrompt(recoveryCtx, spec.Prompt)
 	}
 
-	hookEval := hooks.NewEvaluator(cfg.Hooks)
+	hookEval := hooks.NewEvaluatorFromDirs(spec.Cwd)
 	if denied, matched := checkPromptDenied(spec, hookEval); denied {
 		code, msg, suggestion := promptDeniedFailure(matched)
 		return failResult(spec, code, msg, suggestion)
@@ -473,10 +415,10 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	defer cancel()
 
 	if flags.async {
-		return runAsyncDispatch(ctx, spec, req.DispatchAnnotations, cfg, stderr, stdout, flags.verbose, flags.stream, hookEval)
+		return runAsyncDispatch(ctx, spec, req.DispatchAnnotations, stderr, stdout, flags.verbose, flags.stream, hookEval)
 	}
 
-	result, err := dispatchSpec(ctx, spec, req.DispatchAnnotations, cfg, stderr, flags.verbose, flags.stream, hookEval)
+	result, err := dispatchSync(ctx, spec, req.DispatchAnnotations, stderr, flags.verbose, flags.stream, hookEval)
 	if err != nil {
 		return emitFailureResult(stdout, spec, 1, "startup_failed", err.Error(), "")
 	}
@@ -528,53 +470,6 @@ func mergeSkills(base, overlay []string) []string {
 	return merged
 }
 
-func loadSystemPromptFile(sourceDir, promptFile string) (string, error) {
-	promptFile = strings.TrimSpace(promptFile)
-	if promptFile == "" {
-		return "", nil
-	}
-	if filepath.IsAbs(promptFile) {
-		return "", fmt.Errorf("system prompt file %q must be relative to the config source directory; absolute paths are not allowed", promptFile)
-	}
-	sourceDir = strings.TrimSpace(sourceDir)
-	if sourceDir == "" {
-		return "", fmt.Errorf("system prompt file %q cannot be resolved without a config source directory", promptFile)
-	}
-
-	candidateChildren := []string{promptFile}
-	if filepath.Dir(promptFile) == "." {
-		candidateChildren = append(candidateChildren, filepath.Join("prompts", promptFile))
-	}
-
-	tried := make([]string, 0, len(candidateChildren))
-	for _, child := range candidateChildren {
-		path, err := sanitize.SafeJoinPath(sourceDir, child)
-		if err != nil {
-			return "", fmt.Errorf("invalid system prompt file %q: %w", promptFile, err)
-		}
-		tried = append(tried, path)
-
-		data, err := os.ReadFile(path)
-		if err == nil {
-			return string(data), nil
-		}
-		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("read system prompt file %q: %w", path, err)
-		}
-	}
-	return "", fmt.Errorf("read system prompt file %q: not found under %q (tried: %s)", promptFile, sourceDir, strings.Join(tried, ", "))
-}
-
-func prependSystemPrompt(prefix, existing string) string {
-	switch {
-	case strings.TrimSpace(prefix) == "":
-		return existing
-	case strings.TrimSpace(existing) == "":
-		return prefix
-	default:
-		return prefix + "\n\n" + existing
-	}
-}
 
 func checkPromptDenied(spec *types.DispatchSpec, hookEval *hooks.Evaluator) (bool, string) {
 	if spec == nil || hookEval == nil {
@@ -672,7 +567,6 @@ func normalizeDispatchFlags(flags *cliFlags) {
 	if flags == nil {
 		return
 	}
-
 	flags.profile = strings.TrimSpace(flags.profile)
 	for i, name := range flags.skills {
 		flags.skills[i] = strings.TrimSpace(name)
@@ -980,7 +874,6 @@ func buildPreviewResult(req *dispatchRequest, confirmationRequired bool) preview
 		Kind:          "preview",
 		DispatchSpec:  previewDispatchSpecFrom(spec),
 		ResultMetadata: previewResultMeta{
-			Role:    req.DispatchAnnotations.Role,
 			Profile: req.DispatchAnnotations.Profile,
 			Skills:  append([]string(nil), req.DispatchAnnotations.Skills...),
 		},
@@ -1116,7 +1009,6 @@ func newStdinFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	bindBool(fs, &flags.verbose, "Verbose mode", false, "verbose", "v")
 	fs.BoolVar(&flags.stream, "stream", false, "Stream all events to stderr (default: silent)")
 	fs.BoolVar(&flags.async, "async", false, "Return immediately with dispatch ID, run worker in background")
-	fs.StringVar(&flags.config, "config", "", "Config path")
 
 	return fs, flags
 }
@@ -1126,8 +1018,7 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 
 	bindStr(fs, &flags.engine, "Engine name", "", "engine", "E")
-	bindStr(fs, &flags.role, "Role", "", "role", "R")
-	fs.StringVar(&flags.profile, "profile", "", "Profile")
+	bindStr(fs, &flags.profile, "Profile / prompt file", "", "profile", "P")
 	bindStr(fs, &flags.cwd, "Working directory", "", "cwd", "C")
 	bindStr(fs, &flags.model, "Model", "", "model", "m")
 	bindStr(fs, &flags.effort, "Effort", flags.effort, "effort", "e")
@@ -1140,7 +1031,6 @@ func newCLIFlagSet(name string) (*flag.FlagSet, *cliFlags) {
 	fs.StringVar(&flags.artifactDir, "artifact-dir", "", "Artifact directory")
 	fs.StringVar(&flags.recover, "recover", "", "Previous dispatch ID to continue")
 	fs.StringVar(&flags.signal, "signal", "", "Dispatch ID to send signal to")
-	fs.StringVar(&flags.config, "config", "", "Config path")
 	bindBool(fs, &flags.full, "Full access mode", flags.full, "full", "f")
 	fs.BoolVar(&flags.noFull, "no-full", false, "Disable full access mode")
 	fs.StringVar(&flags.promptFile, "prompt-file", "", "Prompt file")
@@ -1252,7 +1142,6 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error)
 	return &dispatchRequest{
 		DispatchSpec: spec,
 		DispatchAnnotations: types.DispatchAnnotations{
-			Role:    flags.role,
 			Profile: flags.profile,
 			Skills:  append([]string(nil), flags.skills...),
 		},
@@ -1383,8 +1272,8 @@ func bindBool(fs *flag.FlagSet, dst *bool, usage string, def bool, names ...stri
 	}
 }
 
-func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, cfg *config.Config, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
-	reg := adapter.NewRegistry(configuredModels(cfg))
+func dispatchSync(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr io.Writer, verbose bool, stream bool, hookEval *hooks.Evaluator) (*types.DispatchResult, error) {
+	reg := adapter.NewRegistry(config.DefaultModels())
 
 	adp, err := reg.Get(spec.Engine)
 	if err != nil {
@@ -1449,19 +1338,3 @@ func dispatchSpec(ctx context.Context, spec *types.DispatchSpec, annotations typ
 	return eng.Dispatch(ctx, spec)
 }
 
-func configuredModels(cfg *config.Config) map[string][]string {
-	models := make(map[string][]string, len(cfg.Models)+3)
-	for engineName, engineModels := range cfg.Models {
-		models[engineName] = append([]string(nil), engineModels...)
-	}
-	if len(models["codex"]) == 0 {
-		models["codex"] = []string{"gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark", "gpt-5.2-codex"}
-	}
-	if len(models["claude"]) == 0 {
-		models["claude"] = []string{"claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"}
-	}
-	if len(models["gemini"]) == 0 {
-		models["gemini"] = []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-3-flash-preview", "gemini-3.1-pro-preview"}
-	}
-	return models
-}

@@ -18,10 +18,42 @@ func writeScript(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+// setupHookDirs creates the directory-convention hook layout for testing.
+func setupHookDirs(t *testing.T, cwd string, preDispatchScripts, onEventScripts []string) {
+	t.Helper()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(onDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range preDispatchScripts {
+		writeScript(t, preDir, filepath.Base(s), readContent(t, s))
+	}
+	for _, s := range onEventScripts {
+		writeScript(t, onDir, filepath.Base(s), readContent(t, s))
+	}
+}
+
+func readContent(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
 func TestCheckPromptAllow(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "allow.sh", "#!/bin/bash\nexit 0\n")
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, preDir, "allow.sh", "#!/bin/bash\nexit 0\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	denied, _ := eval.CheckPrompt("hello", "")
 	if denied {
 		t.Error("expected allow")
@@ -29,9 +61,13 @@ func TestCheckPromptAllow(t *testing.T) {
 }
 
 func TestCheckPromptBlock(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "block.sh", "#!/bin/bash\necho 'blocked reason' >&2\nexit 1\n")
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, preDir, "block.sh", "#!/bin/bash\necho 'blocked reason' >&2\nexit 1\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	denied, reason := eval.CheckPrompt("hello", "")
 	if !denied {
 		t.Error("expected block")
@@ -42,9 +78,13 @@ func TestCheckPromptBlock(t *testing.T) {
 }
 
 func TestCheckPromptWarn(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "warn.sh", "#!/bin/bash\necho 'warn reason' >&2\nexit 2\n")
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, preDir, "warn.sh", "#!/bin/bash\necho 'warn reason' >&2\nexit 2\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	denied, _ := eval.CheckPrompt("hello", "")
 	// Warn in pre_dispatch is NOT deny — it's allow with a note
 	if denied {
@@ -53,9 +93,13 @@ func TestCheckPromptWarn(t *testing.T) {
 }
 
 func TestCheckEventBlock(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "block.sh", "#!/bin/bash\necho 'event blocked' >&2\nexit 1\n")
-	eval := NewEvaluator(HooksConfig{OnEvent: []string{script}})
+	cwd := t.TempDir()
+	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
+	if err := os.MkdirAll(onDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, onDir, "block.sh", "#!/bin/bash\necho 'event blocked' >&2\nexit 1\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	action, reason := eval.CheckEvent(&types.HarnessEvent{Command: "rm -rf /"})
 	if action != "deny" {
 		t.Errorf("action = %q, want deny", action)
@@ -66,9 +110,13 @@ func TestCheckEventBlock(t *testing.T) {
 }
 
 func TestCheckEventWarn(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "warn.sh", "#!/bin/bash\necho 'event warn' >&2\nexit 2\n")
-	eval := NewEvaluator(HooksConfig{OnEvent: []string{script}})
+	cwd := t.TempDir()
+	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
+	if err := os.MkdirAll(onDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, onDir, "warn.sh", "#!/bin/bash\necho 'event warn' >&2\nexit 2\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	action, _ := eval.CheckEvent(&types.HarnessEvent{Command: "curl example.com"})
 	if action != "warn" {
 		t.Errorf("action = %q, want warn", action)
@@ -76,30 +124,25 @@ func TestCheckEventWarn(t *testing.T) {
 }
 
 func TestCheckEventAllow(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "allow.sh", "#!/bin/bash\nexit 0\n")
-	eval := NewEvaluator(HooksConfig{OnEvent: []string{script}})
+	cwd := t.TempDir()
+	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
+	if err := os.MkdirAll(onDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, onDir, "allow.sh", "#!/bin/bash\nexit 0\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	action, _ := eval.CheckEvent(&types.HarnessEvent{Command: "ls"})
 	if action != "" {
 		t.Errorf("action = %q, want empty (allow)", action)
 	}
 }
 
-func TestCheckEventDenyActionWarn(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "block.sh", "#!/bin/bash\nexit 1\n")
-	eval := NewEvaluator(HooksConfig{OnEvent: []string{script}, EventDenyAction: "warn"})
-	action, _ := eval.CheckEvent(&types.HarnessEvent{Command: "test"})
-	if action != "warn" {
-		t.Errorf("action = %q, want warn (event_deny_action=warn)", action)
-	}
-}
-
 func TestNoScriptsConfigured(t *testing.T) {
-	eval := NewEvaluator(HooksConfig{})
+	cwd := t.TempDir()
+	eval := NewEvaluatorFromDirs(cwd)
 	denied, _ := eval.CheckPrompt("anything", "")
 	if denied {
-		t.Error("expected allow with empty config")
+		t.Error("expected allow with empty dirs")
 	}
 	action, _ := eval.CheckEvent(&types.HarnessEvent{Command: "anything"})
 	if action != "" {
@@ -107,41 +150,31 @@ func TestNoScriptsConfigured(t *testing.T) {
 	}
 }
 
-func TestScriptTimeout(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "slow.sh", "#!/bin/bash\nsleep 10\nexit 1\n")
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
-	denied, _ := eval.CheckPrompt("test", "")
-	if denied {
-		t.Error("expected allow on timeout (fail-open)")
-	}
-}
-
-func TestScriptNotFound(t *testing.T) {
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{"/nonexistent/script.sh"}})
-	denied, _ := eval.CheckPrompt("test", "")
-	if denied {
-		t.Error("expected allow on missing script (fail-open)")
-	}
-}
-
 func TestHasRules(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "test.sh", "#!/bin/bash\nexit 0\n")
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, preDir, "test.sh", "#!/bin/bash\nexit 0\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	if !eval.HasRules() {
 		t.Error("expected HasRules true")
 	}
-	empty := NewEvaluator(HooksConfig{})
+	empty := NewEvaluatorFromDirs(t.TempDir())
 	if empty.HasRules() {
-		t.Error("expected HasRules false for empty config")
+		t.Error("expected HasRules false for empty dirs")
 	}
 }
 
 func TestPromptInjectionEmpty(t *testing.T) {
-	dir := t.TempDir()
-	script := writeScript(t, dir, "test.sh", "#!/bin/bash\nexit 0\n")
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeScript(t, preDir, "test.sh", "#!/bin/bash\nexit 0\n")
+	eval := NewEvaluatorFromDirs(cwd)
 	if got := eval.PromptInjection(); got != "" {
 		t.Errorf("PromptInjection() = %q, want empty", got)
 	}
@@ -160,9 +193,13 @@ func TestNilEvaluator(t *testing.T) {
 }
 
 func TestCheckEventPathNormalization(t *testing.T) {
-	dir := t.TempDir()
+	cwd := t.TempDir()
+	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
+	if err := os.MkdirAll(onDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// Script checks if HOOK_FILE_PATH starts with / (absolute)
-	script := writeScript(t, dir, "check_abs.sh", `#!/bin/bash
+	writeScript(t, onDir, "check_abs.sh", `#!/bin/bash
 if [[ "${HOOK_FILE_PATH}" == /* ]]; then
     exit 0
 else
@@ -170,7 +207,7 @@ else
     exit 1
 fi
 `)
-	eval := NewEvaluator(HooksConfig{OnEvent: []string{script}})
+	eval := NewEvaluatorFromDirs(cwd)
 	// Pass a relative path -- it should be normalized to absolute
 	action, reason := eval.CheckEvent(&types.HarnessEvent{FilePath: "relative/path/file.go"})
 	if action != "" {
@@ -179,16 +216,20 @@ fi
 }
 
 func TestCheckPromptSystemPrompt(t *testing.T) {
-	dir := t.TempDir()
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// Script blocks if HOOK_SYSTEM_PROMPT contains "secret"
-	script := writeScript(t, dir, "check_sys.sh", `#!/bin/bash
+	writeScript(t, preDir, "check_sys.sh", `#!/bin/bash
 if [[ "${HOOK_SYSTEM_PROMPT}" == *secret* ]]; then
     echo "system prompt contains secret" >&2
     exit 1
 fi
 exit 0
 `)
-	eval := NewEvaluator(HooksConfig{PreDispatch: []string{script}})
+	eval := NewEvaluatorFromDirs(cwd)
 	denied, _ := eval.CheckPrompt("hello", "this has a secret word")
 	if !denied {
 		t.Error("expected block when system prompt contains 'secret'")
@@ -200,16 +241,36 @@ exit 0
 }
 
 func TestEnvVarsPassedToScript(t *testing.T) {
-	dir := t.TempDir()
+	cwd := t.TempDir()
+	onDir := filepath.Join(cwd, ".agent-mux", "hooks", "on-event")
+	if err := os.MkdirAll(onDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	// Script checks that all env vars are set
-	script := writeScript(t, dir, "check_env.sh", `#!/bin/bash
+	writeScript(t, onDir, "check_env.sh", `#!/bin/bash
 if [ -z "${HOOK_PHASE}" ]; then echo "HOOK_PHASE not set" >&2; exit 1; fi
 if [ -z "${HOOK_COMMAND}" ]; then echo "HOOK_COMMAND not set" >&2; exit 1; fi
 exit 0
 `)
-	eval := NewEvaluator(HooksConfig{OnEvent: []string{script}})
+	eval := NewEvaluatorFromDirs(cwd)
 	action, reason := eval.CheckEvent(&types.HarnessEvent{Command: "test-cmd"})
 	if action != "" {
 		t.Errorf("expected allow, got action=%q reason=%q", action, reason)
+	}
+}
+
+func TestNonExecutableFilesSkipped(t *testing.T) {
+	cwd := t.TempDir()
+	preDir := filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch")
+	if err := os.MkdirAll(preDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Non-executable file should be skipped
+	if err := os.WriteFile(filepath.Join(preDir, "not-exec.sh"), []byte("#!/bin/bash\nexit 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	eval := NewEvaluatorFromDirs(cwd)
+	if eval.HasRules() {
+		t.Error("non-executable file should not be treated as a hook script")
 	}
 }

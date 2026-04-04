@@ -24,28 +24,69 @@ type HookResult struct {
 	Reason string
 }
 
-type HooksConfig struct {
-	PreDispatch     []string `toml:"pre_dispatch"`
-	OnEvent         []string `toml:"on_event"`
-	EventDenyAction string   `toml:"event_deny_action"`
-}
-
 type Evaluator struct {
 	preDispatch []string
 	onEvent     []string
-	denyAction  string
 }
 
-func NewEvaluator(cfg HooksConfig) *Evaluator {
-	action := strings.ToLower(strings.TrimSpace(cfg.EventDenyAction))
-	if action != "warn" {
-		action = "kill"
+// NewEvaluatorFromDirs discovers hook scripts from directory conventions:
+//
+//	<cwd>/.agent-mux/hooks/pre-dispatch/  (project-local)
+//	<cwd>/.agent-mux/hooks/on-event/      (project-local)
+//	~/.agent-mux/hooks/pre-dispatch/       (global fallback)
+//	~/.agent-mux/hooks/on-event/           (global fallback)
+//
+// Executable files are collected in lexical order. Project hooks run before global.
+// Hook contract: exit 0=allow, 1=block, 2=warn.
+func NewEvaluatorFromDirs(cwd string) *Evaluator {
+	homeDir := ""
+	if h, err := os.UserHomeDir(); err == nil {
+		homeDir = h
 	}
+
+	var preDispatchDirs, onEventDirs []string
+
+	// Project-local hooks first.
+	preDispatchDirs = append(preDispatchDirs, filepath.Join(cwd, ".agent-mux", "hooks", "pre-dispatch"))
+	onEventDirs = append(onEventDirs, filepath.Join(cwd, ".agent-mux", "hooks", "on-event"))
+
+	// Global fallback.
+	if homeDir != "" {
+		preDispatchDirs = append(preDispatchDirs, filepath.Join(homeDir, ".agent-mux", "hooks", "pre-dispatch"))
+		onEventDirs = append(onEventDirs, filepath.Join(homeDir, ".agent-mux", "hooks", "on-event"))
+	}
+
 	return &Evaluator{
-		preDispatch: expandPaths(cfg.PreDispatch),
-		onEvent:     expandPaths(cfg.OnEvent),
-		denyAction:  action,
+		preDispatch: discoverHookScripts(preDispatchDirs),
+		onEvent:     discoverHookScripts(onEventDirs),
 	}
+}
+
+// discoverHookScripts scans directories in order and returns executable file
+// paths in lexical order within each directory.
+func discoverHookScripts(dirs []string) []string {
+	var scripts []string
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			// Check if executable (any execute bit set).
+			if info.Mode()&0111 != 0 {
+				scripts = append(scripts, path)
+			}
+		}
+	}
+	return scripts
 }
 
 func (e *Evaluator) CheckPrompt(prompt string, systemPrompt ...string) (bool, string) {
@@ -107,9 +148,6 @@ func (e *Evaluator) CheckEvent(evt *types.HarnessEvent) (string, string) {
 			result := runHook(script, input, env)
 			switch result.Action {
 			case "block":
-				if e.denyAction == "warn" {
-					return "warn", result.Reason
-				}
 				return "deny", result.Reason
 			case "warn":
 				return "warn", result.Reason

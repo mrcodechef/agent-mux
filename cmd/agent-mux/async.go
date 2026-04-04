@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/buildoak/agent-mux/internal/config"
 	"github.com/buildoak/agent-mux/internal/dispatch"
 	"github.com/buildoak/agent-mux/internal/hooks"
 	"github.com/buildoak/agent-mux/internal/types"
@@ -17,7 +16,7 @@ import (
 // detaches stdout/stderr, then runs the dispatch synchronously in the
 // current process. The caller is expected to background this process
 // (e.g. run_in_background or shell &).
-func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, cfg *config.Config, stderr, stdout io.Writer, verbose, stream bool, hookEval *hooks.Evaluator) int {
+func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, annotations types.DispatchAnnotations, stderr, stdout io.Writer, verbose, stream bool, hookEval *hooks.Evaluator) int {
 	// Ensure artifact dir exists early so ax status can find the dispatch immediately.
 	if err := dispatch.EnsureArtifactDir(spec.ArtifactDir); err != nil {
 		return emitFailureResult(stdout, spec, 1, "artifact_dir_unwritable",
@@ -80,7 +79,7 @@ func runAsyncDispatch(ctx context.Context, spec *types.DispatchSpec, annotations
 	}
 
 	// Run the dispatch synchronously in this process.
-	result, err := dispatchSpec(ctx, spec, annotations, cfg, dispatchStderr, verbose, stream, hookEval)
+	result, err := dispatchSync(ctx, spec, annotations, dispatchStderr, verbose, stream, hookEval)
 	if err != nil {
 		_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
 			State:        "failed",

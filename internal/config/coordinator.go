@@ -41,9 +41,11 @@ func LoadProfile(name, cwd string) (*CoordinatorSpec, error) {
 	}
 
 	searchDirs := []string{
+		filepath.Join(cwd, ".agent-mux", "prompts"),
+		filepath.Join(cwd, ".agent-mux", "agents"),
 		filepath.Join(cwd, ".claude", "agents"),
 		filepath.Join(cwd, "agents"),
-		filepath.Join(cwd, ".agent-mux", "agents"),
+		filepath.Join(homeDir, ".agent-mux", "prompts"),
 		filepath.Join(homeDir, ".agent-mux", "agents"),
 	}
 
@@ -147,6 +149,93 @@ func splitFrontmatter(data []byte) ([]byte, string, error) {
 	}
 
 	return nil, "", fmt.Errorf("missing closing frontmatter delimiter")
+}
+
+// PromptFileInfo describes a discovered prompt/profile file for `config prompts`.
+type PromptFileInfo struct {
+	Name   string   `json:"name"`
+	Path   string   `json:"path"`
+	Source string   `json:"source"`
+	Skills []string `json:"skills,omitempty"`
+	Effort string   `json:"effort,omitempty"`
+	Engine string   `json:"engine,omitempty"`
+}
+
+// DiscoverPromptFiles scans all profile/prompt search directories and returns
+// deduplicated results with first-match-wins semantics.
+func DiscoverPromptFiles(cwd string) []PromptFileInfo {
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		homeDir = ""
+	}
+
+	type labeledDir struct {
+		dir   string
+		label string
+	}
+
+	var searchDirs []labeledDir
+	searchDirs = append(searchDirs,
+		labeledDir{filepath.Join(cwd, ".agent-mux", "prompts"), "project (prompts)"},
+		labeledDir{filepath.Join(cwd, ".agent-mux", "agents"), "project (agents)"},
+		labeledDir{filepath.Join(cwd, ".claude", "agents"), "project (.claude/agents)"},
+		labeledDir{filepath.Join(cwd, "agents"), "project (agents/)"},
+	)
+	if homeDir != "" {
+		searchDirs = append(searchDirs,
+			labeledDir{filepath.Join(homeDir, ".agent-mux", "prompts"), "global (prompts)"},
+			labeledDir{filepath.Join(homeDir, ".agent-mux", "agents"), "global (agents)"},
+		)
+	}
+
+	seen := make(map[string]struct{})
+	var results []PromptFileInfo
+
+	for _, sd := range searchDirs {
+		entries, err := os.ReadDir(sd.dir)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			fname := entry.Name()
+			if filepath.Ext(fname) != ".md" {
+				continue
+			}
+			name := strings.TrimSuffix(fname, ".md")
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+
+			fullPath := filepath.Join(sd.dir, fname)
+			info := PromptFileInfo{
+				Name:   name,
+				Path:   fullPath,
+				Source: sd.label,
+			}
+
+			// Try to parse frontmatter for metadata.
+			if spec, err := loadCoordinatorSpec(fullPath, name); err == nil {
+				info.Skills = spec.Skills
+				info.Effort = spec.Effort
+				info.Engine = spec.Engine
+			}
+
+			results = append(results, info)
+		}
+	}
+
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Name < results[j].Name
+	})
+	return results
 }
 
 func availableCoordinators(dirs []string) ([]string, error) {

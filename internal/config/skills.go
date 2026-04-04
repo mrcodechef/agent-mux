@@ -20,19 +20,21 @@ type SkillSearchResult struct {
 // LoadSkills loads skill SKILL.md files by name and returns a concatenated prompt
 // block and a list of scripts directories to add to PATH.
 //
-// Resolution order:
-//  1. <cwd>/.claude/skills/<name>/SKILL.md
-//  2. <configDir>/.claude/skills/<name>/SKILL.md  (if configDir != "" and != cwd)
-//  3. Each path in searchPaths: <search_path>/<name>/SKILL.md
+// Resolution order (convention-based):
+//  1. AGENT_MUX_SKILL_PATH entries (colon-separated, prepended)
+//  2. <cwd>/.agent-mux/skills/<name>/SKILL.md
+//  3. <cwd>/.claude/skills/<name>/SKILL.md
+//  4. ~/.agent-mux/skills/<name>/SKILL.md
+//  5. ~/.claude/skills/<name>/SKILL.md
 //
-// roleName is used only for error messages — it names the role that requested the skill.
-func LoadSkills(names []string, cwd string, configDir string, searchPaths []string, roleName string) (prompt string, pathDirs []string, err error) {
+// sourceName is used only for error messages — it names the profile that requested the skill.
+func LoadSkills(names []string, cwd string, sourceName string) (prompt string, pathDirs []string, err error) {
 	if len(names) == 0 {
 		return "", nil, nil
 	}
 
 	// Build the ordered list of search roots.
-	roots := buildSearchRoots(cwd, configDir, searchPaths)
+	roots := buildSearchRoots(cwd)
 
 	seen := make(map[string]struct{}, len(names))
 	blocks := make([]string, 0, len(names))
@@ -50,7 +52,7 @@ func LoadSkills(names []string, cwd string, configDir string, searchPaths []stri
 
 		resolvedRoot, content, readErr := resolveSkill(name, roots)
 		if readErr != nil {
-			return "", nil, skillNotFoundError(name, roleName, roots)
+			return "", nil, skillNotFoundError(name, sourceName, roots)
 		}
 
 		trimmed := strings.TrimRight(string(content), "\r\n")
@@ -76,30 +78,48 @@ type searchRoot struct {
 	label string
 }
 
-// buildSearchRoots returns the ordered list of skill search roots.
-func buildSearchRoots(cwd string, configDir string, searchPaths []string) []searchRoot {
-	roots := make([]searchRoot, 0, 2+len(searchPaths))
+// buildSearchRoots returns the ordered list of skill search roots using
+// directory conventions and AGENT_MUX_SKILL_PATH env var.
+func buildSearchRoots(cwd string) []searchRoot {
+	roots := make([]searchRoot, 0, 8)
 
-	// 1. CWD-relative
+	// 0. AGENT_MUX_SKILL_PATH entries (prepended, colon-separated)
+	if envPath := os.Getenv("AGENT_MUX_SKILL_PATH"); envPath != "" {
+		for _, sp := range strings.Split(envPath, ":") {
+			sp = strings.TrimSpace(sp)
+			if sp == "" {
+				continue
+			}
+			expanded := expandHome(sp)
+			roots = append(roots, searchRoot{
+				dir:   expanded,
+				label: fmt.Sprintf("env (%s)", sp),
+			})
+		}
+	}
+
+	// 1. <cwd>/.agent-mux/skills
+	roots = append(roots, searchRoot{
+		dir:   filepath.Join(cwd, ".agent-mux", "skills"),
+		label: "cwd (.agent-mux/skills)",
+	})
+
+	// 2. <cwd>/.claude/skills
 	roots = append(roots, searchRoot{
 		dir:   filepath.Join(cwd, ".claude", "skills"),
 		label: "cwd (.claude/skills)",
 	})
 
-	// 2. ConfigDir-relative (only if different from cwd)
-	if configDir != "" && configDir != cwd {
+	// 3. ~/.agent-mux/skills
+	if homeDir, err := os.UserHomeDir(); err == nil {
 		roots = append(roots, searchRoot{
-			dir:   filepath.Join(configDir, ".claude", "skills"),
-			label: "configDir (.claude/skills)",
+			dir:   filepath.Join(homeDir, ".agent-mux", "skills"),
+			label: "global (~/.agent-mux/skills)",
 		})
-	}
-
-	// 3. Explicit search_paths
-	for _, sp := range searchPaths {
-		expanded := expandHome(sp)
+		// 4. ~/.claude/skills
 		roots = append(roots, searchRoot{
-			dir:   expanded,
-			label: fmt.Sprintf("search_path (%s)", sp),
+			dir:   filepath.Join(homeDir, ".claude", "skills"),
+			label: "global (~/.claude/skills)",
 		})
 	}
 
@@ -122,13 +142,13 @@ func resolveSkill(name string, roots []searchRoot) (resolvedRoot string, content
 	return "", nil, fmt.Errorf("not found")
 }
 
-// skillNotFoundError builds a detailed error message including the role name
-// and all paths that were searched.
-func skillNotFoundError(skillName, roleName string, roots []searchRoot) error {
+// skillNotFoundError builds a detailed error message including the source name
+// (profile or caller context) and all paths that were searched.
+func skillNotFoundError(skillName, sourceName string, roots []searchRoot) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "skill %q not found", skillName)
-	if roleName != "" {
-		fmt.Fprintf(&b, " (injected by role %q)", roleName)
+	if sourceName != "" {
+		fmt.Fprintf(&b, " (requested by %q)", sourceName)
 	}
 	b.WriteString(". Searched:\n")
 	for _, root := range roots {
@@ -145,8 +165,8 @@ func skillNotFoundError(skillName, roleName string, roots []searchRoot) error {
 
 // DiscoverSkills scans all known search roots and returns deduplicated skills
 // with the winning (first-match) path and source label. Used by `config skills`.
-func DiscoverSkills(cwd string, configDir string, searchPaths []string) []SkillSearchResult {
-	roots := buildSearchRoots(cwd, configDir, searchPaths)
+func DiscoverSkills(cwd string) []SkillSearchResult {
+	roots := buildSearchRoots(cwd)
 	seen := make(map[string]struct{})
 	var results []SkillSearchResult
 
