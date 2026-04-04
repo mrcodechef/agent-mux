@@ -151,7 +151,7 @@ func PromptPreamble(spec *types.DispatchSpec) []string {
 		lines = append(lines, "Relevant context from the coordinator is at $AGENT_MUX_CONTEXT. Read it before starting.")
 	}
 	if spec.ArtifactDir != "" {
-		lines = append(lines, "Write intermediate artifacts to $AGENT_MUX_ARTIFACT_DIR.")
+		lines = append(lines, "If you need a temporary directory for intermediate files, use $AGENT_MUX_ARTIFACT_DIR.")
 	}
 	return lines
 }
