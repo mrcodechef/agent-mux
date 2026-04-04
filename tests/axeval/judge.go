@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 )
@@ -120,20 +121,14 @@ func extractJSON(text string) string {
 		}
 	}
 
-	// Try to find a raw JSON object.
+	// Try to find a raw JSON object using json.Decoder, which handles
+	// string escaping correctly (unlike manual brace counting).
 	braceStart := indexOf(text, "{")
 	if braceStart >= 0 {
-		depth := 0
-		for i := braceStart; i < len(text); i++ {
-			switch text[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					return text[braceStart : i+1]
-				}
-			}
+		dec := json.NewDecoder(strings.NewReader(text[braceStart:]))
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err == nil {
+			return string(raw)
 		}
 	}
 
