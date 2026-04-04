@@ -316,10 +316,13 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 		spec.MaxDepth = config.MaxDepth()
 	}
 	if spec.TimeoutSec == 0 {
-		spec.TimeoutSec = config.TimeoutForEffort(spec.Effort)
+		spec.TimeoutSec = config.DefaultTimeoutSec
 	}
 	if spec.GraceSec == 0 {
-		spec.GraceSec = config.GraceSec()
+		spec.GraceSec = spec.TimeoutSec / 2
+		if spec.GraceSec < 1 {
+			spec.GraceSec = 1
+		}
 	}
 	if err := validateResolvedDispatchTimeouts(spec); err != nil {
 		return failResult(spec, "invalid_input", err.Error(), "")
@@ -735,7 +738,9 @@ func materializeStdinDispatchSpec(req *dispatchRequest, data []byte, fields map[
 		}
 	}
 	if !jsonFieldSet(fields, "grace_sec") {
-		spec.GraceSec = 60
+		// Grace will be computed proportionally in the apply-defaults path.
+		// Leave as 0 here; the caller fills it in after timeout is resolved.
+		spec.GraceSec = 0
 	} else {
 		if err := validatePositiveDispatchValue("grace_sec", spec.GraceSec); err != nil {
 			return err
@@ -1133,7 +1138,7 @@ func buildDispatchSpecE(flags cliFlags, args []string) (*dispatchRequest, error)
 		ContextFile:  flags.contextFile,
 		ArtifactDir:  artifactDir,
 		TimeoutSec:   flags.timeout,
-		GraceSec:     60,
+		GraceSec:     0, // computed proportionally after timeout is resolved
 		MaxDepth:     flags.maxDepth,
 		EngineOpts:   engineOpts,
 		FullAccess:   fullAccess,

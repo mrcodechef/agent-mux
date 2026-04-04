@@ -61,21 +61,16 @@ func runConfigRoot(args []string, stdout io.Writer) int {
 	writeCompactJSON(stdout, map[string]any{
 		"kind": "config_summary",
 		"defaults": map[string]any{
-			"effort":         "high",
-			"max_depth":      config.MaxDepth(),
-			"grace_sec":      config.GraceSec(),
+			"effort":          "high",
+			"timeout_sec":     config.DefaultTimeoutSec,
+			"grace_sec":       "timeout_sec * 0.5 (proportional)",
+			"max_depth":       config.MaxDepth(),
 			"permission_mode": config.PermissionMode(),
 		},
 		"liveness": map[string]any{
 			"heartbeat_interval_sec": config.HeartbeatIntervalSec(),
 			"silence_warn_seconds":   config.SilenceWarnSeconds(),
 			"silence_kill_seconds":   config.SilenceKillSeconds(),
-		},
-		"effort_timeouts": map[string]int{
-			"low":    config.TimeoutForEffort("low"),
-			"medium": config.TimeoutForEffort("medium"),
-			"high":   config.TimeoutForEffort("high"),
-			"xhigh":  config.TimeoutForEffort("xhigh"),
 		},
 		"models": config.DefaultModels(),
 	})

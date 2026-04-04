@@ -689,8 +689,9 @@ func TestBuildDispatchSpecDefaults(t *testing.T) {
 	if !spec.FullAccess {
 		t.Fatal("full_access = false, want true")
 	}
-	if spec.GraceSec != 60 {
-		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
+	// buildDispatchSpecE leaves GraceSec=0; defaults (proportional) are applied in run().
+	if spec.GraceSec != 0 {
+		t.Fatalf("grace_sec = %d, want 0 (computed later in run)", spec.GraceSec)
 	}
 	wantArtifactDirPath, err := dispatch.DefaultArtifactDir(spec.DispatchID)
 	if err != nil {
@@ -980,8 +981,9 @@ func TestDecodeStdinDispatchSpecMaterializesDefaults(t *testing.T) {
 	if !spec.FullAccess {
 		t.Fatal("full_access = false, want true")
 	}
-	if spec.GraceSec != 60 {
-		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
+	// decodeStdinDispatchSpec leaves GraceSec=0 when not provided; proportional default applied in run().
+	if spec.GraceSec != 0 {
+		t.Fatalf("grace_sec = %d, want 0 (computed later in run)", spec.GraceSec)
 	}
 }
 
@@ -994,8 +996,9 @@ func TestDecodeStdinDispatchSpecPreservesExplicitFalse(t *testing.T) {
 	if spec.FullAccess {
 		t.Fatal("full_access = true, want false")
 	}
-	if spec.GraceSec != 60 {
-		t.Fatalf("grace_sec = %d, want 60", spec.GraceSec)
+	// decodeStdinDispatchSpec leaves GraceSec=0 when not provided; proportional default applied in run().
+	if spec.GraceSec != 0 {
+		t.Fatalf("grace_sec = %d, want 0 (computed later in run)", spec.GraceSec)
 	}
 }
 

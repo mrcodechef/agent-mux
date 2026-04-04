@@ -5,21 +5,15 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 )
 
 // --- Hardcoded defaults (previously from config.toml) ---
 
-// Effort-to-timeout mapping (seconds).
-var effortTimeouts = map[string]int{
-	"low":    60,
-	"medium": 300,
-	"high":   900,
-	"xhigh":  1800,
-}
+// DefaultTimeoutSec is the fallback timeout when no timeout is specified
+// via CLI flag or frontmatter. Effort level does not affect timeout.
+const DefaultTimeoutSec = 900
 
-const defaultGraceSec = 60
 const defaultMaxDepth = 2
 const defaultPermissionMode = ""
 
@@ -67,20 +61,6 @@ func validatePositiveInt(field, source string, value int) error {
 }
 
 // --- Public API (replaces Config struct) ---
-
-// TimeoutForEffort returns the hardcoded timeout for the given effort level.
-func TimeoutForEffort(effort string) int {
-	key := strings.ToLower(strings.TrimSpace(effort))
-	if t, ok := effortTimeouts[key]; ok {
-		return t
-	}
-	return effortTimeouts["high"] // default fallback
-}
-
-// GraceSec returns the hardcoded grace period.
-func GraceSec() int {
-	return defaultGraceSec
-}
 
 // MaxDepth returns the max recursion depth from env or hardcoded default.
 func MaxDepth() int {

@@ -5,31 +5,9 @@ import (
 	"testing"
 )
 
-func TestTimeoutForEffort(t *testing.T) {
-	tests := []struct {
-		effort string
-		want   int
-	}{
-		{"low", 60},
-		{"medium", 300},
-		{"high", 900},
-		{"xhigh", 1800},
-		{"unknown", 900}, // defaults to high
-		{"HIGH", 900},    // case insensitive
-		{"  high  ", 900},
-	}
-
-	for _, tt := range tests {
-		got := TimeoutForEffort(tt.effort)
-		if got != tt.want {
-			t.Errorf("TimeoutForEffort(%q) = %d, want %d", tt.effort, got, tt.want)
-		}
-	}
-}
-
-func TestGraceSec(t *testing.T) {
-	if got := GraceSec(); got != 60 {
-		t.Fatalf("GraceSec() = %d, want 60", got)
+func TestDefaultTimeoutSec(t *testing.T) {
+	if DefaultTimeoutSec != 900 {
+		t.Fatalf("DefaultTimeoutSec = %d, want 900", DefaultTimeoutSec)
 	}
 }
 
