@@ -28,7 +28,6 @@ Normal dispatch writes one `DispatchResult` object to `stdout`.
   "metadata": {
     "engine": "codex",
     "model": "gpt-5.4",
-    "role": "lifter",
     "profile": "planner",
     "skills": ["agent-mux"],
     "tokens": {
@@ -112,15 +111,12 @@ Present when `status` is `failed`.
 |-------|------|-------|
 | `engine` | string | Engine used |
 | `model` | string | Model used |
-| `role` | string | Role name |
-| `profile` | string | Profile name |
-| `skills` | string[] | Injected skills |
+| `profile` | string | Profile name (from `DispatchAnnotations`) |
+| `skills` | string[] | Injected skill names |
 | `tokens` | object | Token usage |
 | `turns` | int | Conversation turns |
 | `cost_usd` | float | Estimated cost |
 | `session_id` | string | Harness session ID |
-
-There is no `variant` field in current metadata.
 
 ### TokenUsage
 
@@ -182,7 +178,6 @@ NOT guaranteed before ack:
     "full_access": true
   },
   "result_metadata": {
-    "role": "lifter",
     "profile": "planner",
     "skills": ["agent-mux"]
   },
@@ -228,7 +223,6 @@ Persistent dispatch metadata is written to `meta.json`.
   "engine": "codex",
   "model": "gpt-5.4",
   "effort": "high",
-  "role": "lifter",
   "profile": "planner",
   "cwd": "/repo",
   "artifact_dir": "/tmp/agent-mux-501/01KM.../",
@@ -250,7 +244,6 @@ Persistent dispatch metadata is written to `meta.json`.
 | `cwd` | string |
 | `engine` | string |
 | `model` | string |
-| `role` | string |
 | `profile` | string |
 | `effort` | string |
 | `session_id` | string |
@@ -273,7 +266,6 @@ either a `DispatchRecord` or a live `status.json` view.
   "status": "completed",
   "engine": "codex",
   "model": "gpt-5.4",
-  "role": "lifter",
   "started": "2026-04-03T10:30:00Z",
   "ended": "2026-04-03T10:45:00Z",
   "duration_ms": 900000,

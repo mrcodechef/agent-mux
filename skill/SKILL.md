@@ -25,10 +25,10 @@ Three patterns cover 95% of dispatches.
 agent-mux -P=lifter -C=/repo "Fix the retry logic in src/client/retry.go" 2>/dev/null
 ```
 
-**Profile dispatch with engine variant** (same profile, different engine):
+**Profile dispatch on a different engine** (same profile, explicit engine+model):
 
 ```bash
-agent-mux -P=researcher -V=gemini -C=/repo "Analyze the auth module for hidden coupling" 2>/dev/null
+agent-mux -P=researcher -E=gemini -m gemini-2.5-pro -C=/repo "Analyze the auth module for hidden coupling" 2>/dev/null
 ```
 
 **Async dispatch** (fire, collect later):
@@ -75,10 +75,10 @@ Pick the engine before the profile:
 **Gemini dispatch patterns:**
 
 ```bash
-# Via variant (preferred when variant exists in config)
-agent-mux -P=researcher -V=gemini -C=/repo "Synthesize findings"
+# Profile with engine+model override
+agent-mux -P=researcher -E=gemini -m gemini-2.5-pro -C=/repo "Synthesize findings"
 
-# Via direct engine override
+# Direct engine override (no profile)
 agent-mux -E=gemini -m gemini-2.5-pro -C=/repo "Review the migration plan"
 
 # Via --stdin JSON
@@ -118,18 +118,16 @@ Current profiles and when to pick each:
 plans, grunt for bulk edits, researcher for analysis. When in doubt, scout
 first, then dispatch the right worker with what you learned.
 
-**Gemini variants** exist for most roles (scout, explorer, researcher,
-architect, lifter, lifter-deep, grunt, auditor). Use `-V=gemini` to dispatch
-any of these on Gemini instead of their default engine. Flash models for
-quick work, Pro models for deep analysis -- the variant config handles this
-mapping.
+**Gemini dispatch** is available for any profile. Use `-E=gemini` with a model
+override to dispatch on Gemini instead of the profile's default engine. Flash
+models for quick work, Pro models for deep analysis -- select the model
+explicitly via `-m`.
 
 ## Essential Flags
 
 | Flag | Short | What it does |
 |------|-------|-------------|
 | `-P` / `--profile` | `-P` | Load a prompt file by name. The primary dispatch flag |
-| `-V` / `--variant` | `-V` | Select a role variant (e.g., `-V=gemini` for Gemini engine variant) |
 | `-E` / `--engine` | `-E` | Override engine: `codex`, `claude`, `gemini` |
 | `-m` / `--model` | `-m` | Override model |
 | `-e` / `--effort` | `-e` | `low`, `medium`, `high`, `xhigh`. Gemini ignores this (warns); use model selection instead |

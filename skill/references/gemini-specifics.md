@@ -61,8 +61,8 @@ discards the value:
 |-------|----------|
 | `gemini-2.5-flash` | Fast, cheap. Quick checks, light analysis |
 | `gemini-2.5-pro` | Deep analysis, complex reasoning |
-| `gemini-3-flash-preview` | Latest fast model. Default for flash-tier variants |
-| `gemini-3.1-pro-preview` | Latest deep model. Default for pro-tier variants |
+| `gemini-3-flash-preview` | Latest fast model. Good default for quick checks |
+| `gemini-3.1-pro-preview` | Latest deep model. Good default for deep analysis |
 
 Rule of thumb: Flash for reads and light tasks, Pro for synthesis and review.
 
@@ -177,19 +177,27 @@ match suggestion).
 
 ---
 
-## Configured Variants
+## Dispatching Profiles on Gemini
 
-Roles with Gemini variants (from `config.toml`):
+Any profile can be dispatched on Gemini by overriding the engine and model
+via CLI flags. The profile's system prompt, skills, and timeout still apply;
+only the engine and model change.
 
-| Role | Variant | Model | Notes |
-|------|---------|-------|-------|
-| `scout` | `gemini` | `gemini-3-flash-preview` | Quick checks |
-| `explorer` | `gemini` | `gemini-3-flash-preview` | Codebase exploration, 300s timeout |
-| `researcher` | `gemini` | `gemini-3.1-pro-preview` | Deep research with web-search + summarize |
-| `architect` | `gemini` | `gemini-3.1-pro-preview` | Strategic reasoning |
-| `lifter` | `gemini` | `gemini-3-flash-preview` | Implementation, 1200s timeout |
-| `lifter-deep` | `gemini` | `gemini-3.1-pro-preview` | Hard problems with think-protocol |
-| `grunt` | `gemini` | `gemini-3-flash-preview` | Mechanical edits |
-| `auditor` | `gemini` | `gemini-3.1-pro-preview` | Adversarial review |
+```bash
+# Use researcher profile on Gemini Pro
+agent-mux -P=researcher -E=gemini -m gemini-3.1-pro-preview -C=/repo "Synthesize findings"
 
-Dispatch via variant flag: `-P=researcher -V=gemini`
+# Use scout profile on Gemini Flash
+agent-mux -P=scout -E=gemini -m gemini-3-flash-preview -C=/repo "Quick status check"
+```
+
+Recommended model pairings:
+
+| Task type | Suggested model | Notes |
+|-----------|-----------------|-------|
+| Quick checks, light reads | `gemini-3-flash-preview` | Fast and cheap |
+| Codebase exploration | `gemini-3-flash-preview` | Good breadth coverage |
+| Deep research, synthesis | `gemini-3.1-pro-preview` | Strong reasoning |
+| Strategic planning | `gemini-3.1-pro-preview` | Complex multi-step |
+| Implementation | `gemini-3-flash-preview` | Adequate for scoped edits |
+| Adversarial review | `gemini-3.1-pro-preview` | Thorough analysis |

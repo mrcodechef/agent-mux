@@ -88,10 +88,8 @@ or similar dispatch flags. Put those fields in the JSON object.
 
 | Invocation | Purpose |
 |------------|---------|
-| `agent-mux config` | resolved config JSON with `_sources` |
-| `agent-mux config --sources` | JSON list of loaded config files |
+| `agent-mux config` | resolved config summary (defaults, liveness, models) |
 | `agent-mux config prompts [--json]` | profile catalog |
-| `agent-mux config models [--json]` | configured model lists |
 | `agent-mux config skills [--json]` | discovered skills and winning paths |
 
 ### Lifecycle flags
