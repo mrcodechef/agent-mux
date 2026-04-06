@@ -125,6 +125,12 @@ func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 		spec.EngineOpts["stall_timeout_seconds"] = 60
 	}
 
+	if opts, ok := spec.EngineOpts["reasoning"]; ok {
+		if r, ok := opts.(string); ok && r != "" {
+			log.Printf("[gemini] Gemini CLI does not support effort flag; ignoring effort=%s — use model selection for thinking depth control", r)
+		}
+	}
+
 	args := []string{"-p", spec.Prompt, "-o", "stream-json"}
 	if spec.Model != "" {
 		args = append(args, "-m", spec.Model)
