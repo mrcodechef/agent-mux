@@ -7,9 +7,8 @@ Dispatch is the core execution path in agent-mux: one resolved `DispatchSpec` go
 The current CLI path is:
 
 1. Parse either normal dispatch flags or `--stdin` JSON.
-2. Load config with `config.LoadConfig(flags.config, spec.Cwd)`.
-3. Apply profile defaults when `profile` is set.
-4. Apply profile defaults (engine, model, effort, timeout, system prompt, skills) when profile is set.
+2. Load profile prompt file via `config.LoadProfile(profileName)` when `profile` is set.
+3. Apply profile defaults (engine, model, effort, timeout, system prompt, skills) from the prompt file frontmatter.
 5. Fill unresolved `engine`, `model`, `effort`, `max_depth`, `timeout_sec`, and `grace_sec`.
 6. Inject default `engine_opts` values for liveness and `permission-mode` when they were not set explicitly.
 7. Load skill prompts and skill `scripts/` directories unless `skip_skills` is true.
