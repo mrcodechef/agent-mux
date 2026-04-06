@@ -242,6 +242,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		sawResponse       bool
 		toolsUsedCount    int
 		filesChangedCount int
+		toolExecuting     bool // true between tool start and tool end; pauses stall timer
 	)
 	parseErrorCount := 0
 
@@ -298,6 +299,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			statusLastActivity = "session started"
 
 		case types.EventToolStart:
+			toolExecuting = true
 			if evt.Tool != "" {
 				activity.ToolCalls = append(activity.ToolCalls, evt.Tool)
 				toolsUsedCount++
@@ -314,6 +316,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 
 		case types.EventToolEnd:
+			toolExecuting = false
 			activeCommand = ""
 			commandStartTime = time.Time{}
 			longCommandExtended = false
@@ -330,6 +333,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			_ = emitter.EmitFileRead(evt.FilePath)
 
 		case types.EventCommandRun:
+			toolExecuting = true
 			activity.ToolCalls = appendUnique(activity.ToolCalls, evt.Tool)
 			activity.CommandsRun = appendUnique(activity.CommandsRun, evt.Command)
 			if evt.Command != "" {
@@ -350,6 +354,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			lastResponse = evt.Text
 			sawResponse = true
 			// A response implies any in-flight tool has completed.
+			toolExecuting = false
 			activeCommand = ""
 			commandStartTime = time.Time{}
 			longCommandExtended = false
@@ -372,6 +377,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case types.EventTurnComplete:
 			turnCount++
 			// A turn completing implies any in-flight tool has also finished.
+			toolExecuting = false
 			activeCommand = ""
 			commandStartTime = time.Time{}
 			longCommandExtended = false
@@ -849,6 +855,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			if activeCommand != "" {
 				statusActivity = fmt.Sprintf("running: %s", truncate(activeCommand, 60))
 			}
+			stallPaused := toolExecuting // pause stall timer while a tool is executing
 			statusToolsUsed := toolsUsedCount
 			statusFilesChanged := filesChangedCount
 			mu.Unlock()
@@ -857,7 +864,9 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			// Stall timeout: fires on sustained silence when configured, producing
 			// a distinct stall_timeout status. Checked before frozen_killed so the
 			// more specific status wins when stallTimeout < effectiveKill.
-			if stallTimeout > 0 && silence >= stallTimeout && setTerminal("stall_timeout") {
+			// Paused while a tool is executing — legitimate tool runs (e.g. docker build)
+			// can be silent for minutes without indicating a stall.
+			if stallTimeout > 0 && !stallPaused && silence >= stallTimeout && setTerminal("stall_timeout") {
 				elapsed := int(time.Since(startTime).Seconds())
 				msg := fmt.Sprintf("No NDJSON output for %ds (stall timeout). Total elapsed: %ds. Process killed.", silence, elapsed)
 				_ = emitter.EmitError("stall_timeout", msg)

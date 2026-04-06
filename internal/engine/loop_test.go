@@ -1722,3 +1722,205 @@ func TestStallTimeoutCompletedDoesNotTrigger(t *testing.T) {
 		t.Fatalf("response = %q, want done-quickly", result.Response)
 	}
 }
+
+func TestStallTimeoutPausedDuringToolExecution(t *testing.T) {
+	// A tool_call event pauses the stall timer. Silence during tool execution
+	// (between TOOL_START and TOOL_END) should NOT trigger stall timeout,
+	// even if the silence exceeds stall_timeout_seconds.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-tool'",
+		"echo 'TOOL_START:docker build .'",
+		// Silence for 6s — exceeds stall_timeout_seconds=3 but should NOT kill
+		"sleep 6",
+		"echo 'TOOL_END:run_shell_command'",
+		"echo 'RESPONSE:tool-completed-ok'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLTOOL",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds": 3,
+			"silence_warn_seconds":  60,
+			"silence_kill_seconds":  120,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "tool-completed-ok" {
+		t.Fatalf("response = %q, want tool-completed-ok", result.Response)
+	}
+}
+
+func TestStallTimeoutResumesAfterToolResult(t *testing.T) {
+	// After a tool_result, the stall timer resumes. If the process goes silent
+	// after tool completion, the stall timer should fire.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-resume'",
+		"echo 'TOOL_START:quick-tool'",
+		"sleep 1",
+		"echo 'TOOL_END:quick-tool'",
+		// Now tool is done — stall timer resumes. Go silent for > stall_timeout_seconds.
+		"trap 'exit 0' TERM",
+		"while :; do sleep 0.1; done",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLRESUME",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds": 3,
+			"silence_warn_seconds":  60,
+			"silence_kill_seconds":  120,
+		},
+	}
+
+	var eventBuf strings.Builder
+	engine := NewLoopEngine(adapter, &eventBuf, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusStallTimeout {
+		t.Fatalf("status = %q, want stall_timeout; error = %+v", result.Status, result.Error)
+	}
+	if result.Error == nil || result.Error.Code != "stall_timeout" {
+		t.Fatalf("error = %+v, want stall_timeout", result.Error)
+	}
+}
+
+func TestStallTimeoutPausedMultipleToolCalls(t *testing.T) {
+	// Multiple sequential tool calls: tool_call → tool_result → tool_call →
+	// long silence during second tool → tool_result → completes normally.
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-multi'",
+		// First tool: quick
+		"echo 'TOOL_START:read_file'",
+		"sleep 1",
+		"echo 'TOOL_END:read_file'",
+		// Second tool: long (exceeds stall timeout)
+		"echo 'TOOL_START:docker build .'",
+		"sleep 6",
+		"echo 'TOOL_END:run_shell_command'",
+		"echo 'RESPONSE:multi-tool-ok'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLMULTI",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds": 3,
+			"silence_warn_seconds":  60,
+			"silence_kill_seconds":  120,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "multi-tool-ok" {
+		t.Fatalf("response = %q, want multi-tool-ok", result.Response)
+	}
+}
+
+func TestStallTimeoutCommandRunPausesTimer(t *testing.T) {
+	// COMMAND events (EventCommandRun) should also pause the stall timer,
+	// since they represent tool execution (e.g. run_shell_command).
+	artifactDir := t.TempDir()
+
+	adapter := newScriptedAdapter(strings.Join([]string{
+		"echo 'SESSION:stall-cmd'",
+		"echo 'COMMAND:docker build -t myimage .'",
+		// Silence for 6s — exceeds stall_timeout_seconds=3
+		"sleep 6",
+		"echo 'TOOL_END:shell'",
+		"echo 'RESPONSE:cmd-ok'",
+		"echo 'TURN:1,1,0'",
+	}, "\n"))
+	adapter.supportsResume = false
+
+	spec := &types.DispatchSpec{
+		DispatchID:  "01STALLCMD",
+		Engine:      "gemini",
+		Model:       "test",
+		Prompt:      "ignored",
+		Cwd:         "/tmp",
+		ArtifactDir: artifactDir,
+		GraceSec:    1,
+		TimeoutSec:  30,
+		EngineOpts: map[string]any{
+			"stall_timeout_seconds": 3,
+			"silence_warn_seconds":  60,
+			"silence_kill_seconds":  120,
+		},
+	}
+
+	engine := NewLoopEngine(adapter, io.Discard, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := engine.Dispatch(ctx, spec)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.Status != types.StatusCompleted {
+		t.Fatalf("status = %q, want completed; error = %+v", result.Status, result.Error)
+	}
+	if result.Response != "cmd-ok" {
+		t.Fatalf("response = %q, want cmd-ok", result.Response)
+	}
+}
