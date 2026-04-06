@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.3.0] - 2026-04-06
+
+### Added
+
+- **Gemini stall detection** — engine loop now detects silent Gemini sessions and kills them after a configurable timeout (default 60s). Stall timer pauses during tool execution to avoid killing legitimate long-running tools. New `stall_timeout` state in lifecycle.
+- **Gemini effort warning** — adapter logs a warning when effort flag is set for Gemini dispatch, since Gemini CLI has no effort/thinking-budget knob. Model selection is the depth lever.
+- **CLI help discoverability** — engine names (`codex`, `claude`, `gemini`) now listed in flag descriptions. Valid values for `--effort`, `--permission-mode`, and `--sandbox` enumerated. Multi-step pipeline example added to help output. Flag format note clarifying double-dash requirement for long flags.
+- **Gemini v0.34.0 test coverage** — 644 lines of new tests covering dual event schema, delta buffer accumulation, tool ID correlation, approval mode validation, per-model token stats, and raw passthrough events. Adapter coverage at 86.3%.
+
+### Fixed
+
+- **5 CLI UX improvements** — phantom `-R` example removed, single-dash long-form flags clarified, canonical dispatch example added, `--async` backgrounding warning added.
+
+### Changed
+
+- **Documentation overhaul** — Gemini adapter section in engines.md fully expanded (stall timeout, approval mode defaults, dual event schema, tool tracking, delta buffer, UUID resume degradation). Factual errors fixed across config.md (timeout 1800→900), prompting-guide.md (Gemini tool claims), and engines.md (passthrough behavior). Profile rosters updated to match `config prompts --json` ground truth across README, skill, and config docs. Authentication reframed around personal-use OAuth as primary path.
+- **Skill update** — Gemini integrated into quickstart and dispatch logic. New `gemini-specifics.md` reference file. Phantom `-V/--variant` flag removed (variants are coordinator-layer, not binary). `config --sources` and `config models` phantom subcommands removed. Output contract schema aligned (`role`→`profile`). Dispatch docs updated to current `LoadProfile` path.
+- **Config clarity** — `config.toml` header added clarifying coordinator-layer vs binary scope. Dead `effort = "medium"` removed from Gemini variant.
+
+### Removed
+
+- **`agents/` directory** — legacy agent definitions archived to `_archive/agents/`. Binary reads from `~/.agent-mux/prompts/` only.
+
 ## [3.2.3] - 2026-04-04
 
 ### Fixed
