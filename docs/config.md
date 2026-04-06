@@ -95,17 +95,17 @@ Here `model` overrides the frontmatter value (`gpt-5.4`), while `engine`, `effor
 
 ```bash
 $ agent-mux config prompts
-NAME              ENGINE  MODEL              EFFORT  TIMEOUT  DESCRIPTION
-architect         claude  claude-sonnet-4-6  high    900      System design and migration planning
-auditor           claude  claude-sonnet-4-6  high    900      Code review and correctness verification
-explorer          codex   gpt-5.4-mini       low     300      Broad codebase exploration and mapping
-grunt             codex   gpt-5.3-codex-spark low    120      Mechanical edits, renames, bulk changes
-lifter            codex   gpt-5.4            high    1800     Scoped implementation with verification
-researcher        claude  claude-sonnet-4-6  high    900      Deep analysis and synthesis
-scout             codex   gpt-5.4-mini       low     180      Quick read-only probe and status reads
-ticket-worker     codex   gpt-5.4-mini       medium  600      Ticket execution (standard)
-ticket-worker-heavy codex gpt-5.4            high    900      Ticket execution (complex)
-writer            claude  claude-sonnet-4-6  high    900      Documentation and writing
+NAME                  ENGINE  MODEL             EFFORT  TIMEOUT  DESCRIPTION
+architect             claude  claude-opus-4-6   high    900      Strategic plans with verification gates -- tradeoffs, risks, step-by-step specs
+auditor               codex   gpt-5.4           xhigh   2700     Adversarial review -- finds bugs, missing tests, unsafe assumptions
+explorer              codex   gpt-5.4           high    600      Multi-file internal investigation -- traces chains across code, config, knowledge base
+grunt                 codex   gpt-5.4-mini      medium  600      Mechanical execution -- rote changes, fan-out units, pattern application
+lifter                codex   gpt-5.4           high    1800     Scoped implementation -- code changes with built-in verification
+researcher            claude  claude-opus-4-6   high    900      External synthesis with confidence -- web search, triangulation, sourced verdicts
+scout                 codex   gpt-5.4-mini      low     180      Quick read-only probe -- existence checks, single-fact lookups, status reads
+ticket-worker         codex   gpt-5.4-mini      xhigh   -        Ticket execution (standard)
+ticket-worker-heavy   codex   gpt-5.4           high    -        Ticket execution (complex)
+writer                codex   gpt-5.4           high    1500     Publishable prose in the user's voice -- blog posts, docs, public writing
 ```
 
 `agent-mux config prompts --json` emits a JSON array for programmatic use:

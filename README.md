@@ -4,7 +4,7 @@ Cross-engine dispatch layer. One CLI, one JSON contract, any LLM engine.
 
 > **Go rewrite.** agent-mux was recently rewritten from TypeScript to Go -- static binary, goroutine-based supervision, no runtime dependencies.
 > The TS version is preserved on the `agent-mux-ts` branch.
-> See [DOCS.md](DOCS.md) for the full technical reference.
+> See [docs/](docs/) for the full technical reference.
 
 ## What It Does
 
@@ -32,13 +32,17 @@ go build -o agent-mux ./cmd/agent-mux
 
 ```bash
 ./agent-mux config prompts
-# NAME        ENGINE  MODEL           EFFORT  TIMEOUT  DESCRIPTION
-# architect   claude  claude-sonnet-4-6  high  900      System design and migration planning
-# auditor     claude  claude-sonnet-4-6  high  900      Code review and correctness verification
-# explorer    codex   gpt-5.4-mini       low   300      Broad codebase exploration and mapping
-# grunt       codex   gpt-5.3-codex-spark low  120      Mechanical edits, renames, bulk changes
-# lifter      codex   gpt-5.4            high  1800     Scoped implementation with verification
-# ...
+# NAME                  ENGINE  MODEL             EFFORT  TIMEOUT  DESCRIPTION
+# architect             claude  claude-opus-4-6   high    900      Strategic plans with verification gates
+# auditor               codex   gpt-5.4           xhigh   2700     Adversarial review -- finds bugs, missing tests, unsafe assumptions
+# explorer              codex   gpt-5.4           high    600      Multi-file internal investigation
+# grunt                 codex   gpt-5.4-mini      medium  600      Mechanical execution -- rote changes, fan-out units
+# lifter                codex   gpt-5.4           high    1800     Scoped implementation -- code changes with built-in verification
+# researcher            claude  claude-opus-4-6   high    900      External synthesis with confidence
+# scout                 codex   gpt-5.4-mini      low     180      Quick read-only probe
+# ticket-worker         codex   gpt-5.4-mini      xhigh   -        Ticket execution (standard)
+# ticket-worker-heavy   codex   gpt-5.4           high    -        Ticket execution (complex)
+# writer                codex   gpt-5.4           high    1500     Publishable prose in the user's voice
 ```
 
 **Profile-based dispatch** (engine, model, effort, timeout, system prompt all resolved from the profile):
@@ -136,7 +140,7 @@ API key is set. agent-mux will attempt dispatch if any auth path is available --
 
 | Doc | What |
 |-----|------|
-| [DOCS.md](DOCS.md) | Full technical reference -- architecture, config, dispatch lifecycle |
+| [docs/](docs/) | Full technical reference -- architecture, config, dispatch lifecycle |
 | [SKILL.md](SKILL.md) | Operational manual for AI agents using agent-mux |
 | [BACKLOG.md](BACKLOG.md) | Open bugs, feature requests, spec gaps, and known limitations |
 | [references/](references/) | Engine comparison, prompting guide, output contract, config guides, installation |

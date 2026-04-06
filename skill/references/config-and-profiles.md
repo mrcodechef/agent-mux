@@ -96,10 +96,10 @@ agent-mux config prompts --json    # JSON array for programmatic use
 Example output:
 
 ```
-NAME              ENGINE  MODEL              EFFORT  TIMEOUT  DESCRIPTION
-architect         claude  claude-sonnet-4-6  high    900      System design and migration planning
-lifter            codex   gpt-5.4            high    1800     Scoped implementation with verification
-scout             codex   gpt-5.4-mini       low     180      Quick read-only probe and status reads
+NAME              ENGINE  MODEL             EFFORT  TIMEOUT  DESCRIPTION
+architect         claude  claude-opus-4-6   high    900      Strategic plans with verification gates
+lifter            codex   gpt-5.4           high    1800     Scoped implementation with built-in verification
+scout             codex   gpt-5.4-mini      low     180      Quick read-only probe -- existence checks, single-fact lookups, status reads
 ```
 
 JSON shape:

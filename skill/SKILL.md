@@ -57,13 +57,13 @@ Current profiles and when to pick each:
 | Profile | Engine | Model | Use When |
 |---------|--------|-------|----------|
 | `scout` | codex | gpt-5.4-mini | Quick read-only probe. Status checks, file reads, grep-and-report |
-| `explorer` | codex | gpt-5.4-mini | Broad codebase exploration. Map structure, find patterns, survey |
-| `researcher` | claude | claude-sonnet-4-6 | Deep analysis and synthesis. Multi-file reasoning, comparisons |
-| `architect` | claude | claude-sonnet-4-6 | System design and migration planning. Plans, not code |
+| `explorer` | codex | gpt-5.4 | Broad codebase exploration. Map structure, find patterns, survey |
+| `researcher` | claude | claude-opus-4-6 | Deep analysis and synthesis. Multi-file reasoning, comparisons |
+| `architect` | claude | claude-opus-4-6 | System design and migration planning. Plans, not code |
 | `lifter` | codex | gpt-5.4 | Scoped implementation. The workhorse -- build, test, verify |
-| `auditor` | claude | claude-sonnet-4-6 | Code review and correctness verification |
-| `writer` | claude | claude-sonnet-4-6 | Documentation and writing |
-| `grunt` | codex | gpt-5.3-codex-spark | Mechanical edits, renames, bulk changes. Cheapest and fastest |
+| `auditor` | codex | gpt-5.4 | Adversarial code review. Finds bugs, missing tests, unsafe assumptions |
+| `writer` | codex | gpt-5.4 | Documentation and writing |
+| `grunt` | codex | gpt-5.4-mini | Mechanical edits, renames, bulk changes. Cheapest and fastest |
 | `ticket-worker` | codex | gpt-5.4-mini | Standard ticket execution |
 | `ticket-worker-heavy` | codex | gpt-5.4 | Complex ticket execution |
 
