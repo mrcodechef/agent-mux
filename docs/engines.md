@@ -158,8 +158,13 @@ gemini -p "<prompt>" -o stream-json [-m <model>] \
 - always starts with `-p <prompt> -o stream-json`
 - forwards `-m <model>` when `spec.Model` is set
 - maps `EngineOpts["permission-mode"]` to Gemini `--approval-mode`
-- defaults approval mode to `yolo` when nothing is configured
+- `--approval-mode` defaults to `yolo` when no `permission-mode` engine opt is configured. Valid values: `default`, `auto_edit`, `yolo`, `plan`.
 - joins additional directories into a single comma-separated `--include-directories` value
+
+### Stall Timeout Default
+
+`BuildArgs()` injects `stall_timeout_seconds: 60` into `engine_opts` for all Gemini dispatches unless already set. Runs that go silent for 60s are killed. Override by setting `stall_timeout_seconds` explicitly in `engine_opts`.
+
 ### System Prompt Handling
 Gemini does not get a direct system prompt flag. The adapter uses an environment-file path instead:
 - writes `spec.SystemPrompt` to `<artifact_dir>/system_prompt.md`
@@ -168,21 +173,30 @@ This has an important edge condition: if `spec.ArtifactDir` is empty, the system
 ### Event Parsing and Limitations
 Gemini parsing is intentionally defensive:
 - empty lines are ignored
-- non-JSON stdout lines are ignored
+- non-JSON stdout lines are surfaced as `raw_passthrough` events
 - JSON parse failures are returned as adapter errors
+
+**Dual event schema:** The adapter handles both v0.34.0+ schema (`tool_name`/`parameters`) and legacy schema (`name`/`input`). `resolvedName()` and `resolvedParams()` abstract this. Error detection: `Status == "error"` (new) vs `IsError` (legacy).
+
+**Tool tracking:** `write_file` and `replace` are both tracked through `pendingFiles` for path attribution on `tool_result`. `shell` and `run_shell_command` are both recognized as command-run events.
+
+**Delta buffer:** Streaming assistant messages are accumulated in `deltaBuffer` and flushed as response text on `result` events. Falls back to `raw.Result` when no deltas have accumulated.
+
+**Actual model resolution:** `resolveActualModel()` extracts the model that actually served the request from the per-model stats map. Relevant for auto-routing profiles.
 
 Known limitations:
 
-- no tool calling surface comparable to Codex or Claude in actual dispatch use
-- Non-JSON stdout lines are surfaced as `raw_passthrough` events.
-- system prompt handling depends on `ArtifactDir`; without it, the prompt is silently dropped
-The adapter still recognizes tool-like event shapes such as `read_file`, `write_file`, and `shell` if Gemini emits them, and it tracks `write_file` paths through `pendingFiles`. The practical limitation is upstream CLI capability, not the presence of parsing code.
+- Resume session IDs silently degrade to `"latest"` for UUID inputs
+- System prompt depends on `ArtifactDir`; without it, silently dropped
+- Tool support present but less battle-tested than Codex/Claude adapters
+
 ### Resume
 Gemini resume is supported.
 Resume command shape:
 ```bash
 gemini --resume <session_id> -p "<message>"
 ```
+When `sessionID` matches a UUID pattern, the adapter logs a warning and uses `"latest"` instead — Gemini CLI `--resume` only accepts numeric indices or `"latest"`.
 
 ## Model Validation
 Model validation happens before dispatch, after adapter lookup.
