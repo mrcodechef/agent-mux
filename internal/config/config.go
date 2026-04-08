@@ -19,8 +19,6 @@ const defaultPermissionMode = ""
 
 // Liveness defaults.
 const defaultHeartbeatIntervalSec = 15
-const defaultSilenceWarnSeconds = 90
-const defaultSilenceKillSeconds = 180
 
 // DefaultAsyncPollInterval is the hardcoded default when neither CLI flag
 // nor env provides a value.
@@ -78,16 +76,6 @@ func PermissionMode() string {
 // HeartbeatIntervalSec returns the heartbeat interval from env or hardcoded default.
 func HeartbeatIntervalSec() int {
 	return envInt("AGENT_MUX_HEARTBEAT_INTERVAL_SEC", defaultHeartbeatIntervalSec)
-}
-
-// SilenceWarnSeconds returns the silence warn threshold from env or hardcoded default.
-func SilenceWarnSeconds() int {
-	return envInt("AGENT_MUX_SILENCE_WARN_SECONDS", defaultSilenceWarnSeconds)
-}
-
-// SilenceKillSeconds returns the silence kill threshold from env or hardcoded default.
-func SilenceKillSeconds() int {
-	return envInt("AGENT_MUX_SILENCE_KILL_SECONDS", defaultSilenceKillSeconds)
 }
 
 // DefaultModels returns the built-in model registry per engine.

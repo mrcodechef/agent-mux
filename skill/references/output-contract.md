@@ -49,7 +49,7 @@ Normal dispatch writes one `DispatchResult` object to `stdout`.
 |----------|---------|
 | `completed` | Worker exited cleanly |
 | `timed_out` | Soft timeout fired, grace expired, worker was stopped |
-| `failed` | Validation error, startup problem, hook denial, watchdog kill, or adapter failure |
+| `failed` | Validation error, startup problem, hook denial, signal kill, or adapter failure |
 
 ### Top-level fields
 
@@ -298,7 +298,7 @@ Compact lifecycle JSON:
 Possible extra fields:
 
 - `kill_reason`: added for failed runs when agent-mux can identify a
-  kill-related event (frozen_killed, signal_killed, etc.) from `events.jsonl`
+  kill-related event (killed_by_user, signal_killed, etc.) from `events.jsonl`
   or status metadata. Present only when `status` is `failed`.
 - `session_id`: harness session ID when available
 
@@ -419,8 +419,6 @@ Common event types:
 | `command_run` | `command` |
 | `progress` | `message` |
 | `timeout_warning` | `message` |
-| `frozen_warning` | `silence_seconds`, `message` |
-| `long_command_detected` | `command`, `timeout_seconds`, `message` |
 | `error` | `error_code`, `message` |
 | `info` | `error_code`, `message` |
 | `coordinator_inject` | `message` |
@@ -445,7 +443,7 @@ Default stderr mode is quiet; use `--stream` for the full event stream.
 | `config_error` | yes | Config, role, or control-path problem |
 | `engine_not_found` | yes | Unknown engine |
 | `event_denied` | no | Hook denied a harness event |
-| `frozen_killed` | yes | Worker killed after prolonged silence |
+| `killed_by_user` | no | Process terminated by external signal (SIGTERM/SIGKILL) |
 | `internal_error` | no | Internal invariant failure |
 | `interrupted` | no | Context cancelled or signal received |
 | `invalid_args` | yes | Invalid arguments |

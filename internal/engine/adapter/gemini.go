@@ -115,14 +115,8 @@ func (a *GeminiAdapter) Binary() string {
 }
 
 func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
-	// Inject stall detection default for Gemini dispatches. 60 s is the
-	// engine-level default; callers may override by setting stall_timeout_seconds
-	// explicitly in engine_opts before reaching here.
 	if spec.EngineOpts == nil {
 		spec.EngineOpts = map[string]any{}
-	}
-	if _, ok := spec.EngineOpts["stall_timeout_seconds"]; !ok {
-		spec.EngineOpts["stall_timeout_seconds"] = 60
 	}
 
 	if opts, ok := spec.EngineOpts["reasoning"]; ok {
@@ -140,9 +134,14 @@ func (a *GeminiAdapter) BuildArgs(spec *types.DispatchSpec) []string {
 		approvalMode = mode
 	}
 	args = append(args, "--approval-mode", approvalMode)
-	if dirs := addDirs(spec); len(dirs) > 0 {
-		args = append(args, "--include-directories", strings.Join(dirs, ","))
+	// Always include $HOME and /tmp so Gemini can read context files and
+	// artifacts outside --cwd (its workspace sandbox restricts reads otherwise).
+	dirs := addDirs(spec)
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, home)
 	}
+	dirs = append(dirs, "/tmp")
+	args = append(args, "--include-directories", strings.Join(dirs, ","))
 	return args
 }
 
@@ -418,10 +417,6 @@ func resolveActualModel(models map[string]geminiModelStats) string {
 		}
 	}
 	return bestModel
-}
-
-func (a *GeminiAdapter) StdinNudge() []byte {
-	return nil
 }
 
 func (a *GeminiAdapter) SupportsResume() bool {

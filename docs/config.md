@@ -146,8 +146,6 @@ Liveness supervision uses hardcoded defaults overridable via environment variabl
 | Parameter | Default | Env Override |
 | --- | --- | --- |
 | `heartbeat_interval_sec` | `15` | `AGENT_MUX_HEARTBEAT_INTERVAL_SEC` |
-| `silence_warn_seconds` | `90` | `AGENT_MUX_SILENCE_WARN_SECONDS` |
-| `silence_kill_seconds` | `180` | `AGENT_MUX_SILENCE_KILL_SECONDS` |
 
 ### Model Validation
 

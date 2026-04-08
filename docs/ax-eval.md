@@ -43,7 +43,7 @@ V1 cases cover broad behavior:
 - completion and simple file creation
 - correctness over repo reading and command execution
 - quality and multi-step output generation
-- liveness and freeze handling
+- liveness and timeout handling
 - error handling
 - streaming, async dispatch, steering
 - profile dispatch
@@ -68,7 +68,7 @@ The evaluator helpers in `eval.go` and `eval_v2.go` are intentionally small and 
 ## Fixture Model
 The worker does not run against the agent-mux repository itself. `TestMain` copies `tests/axeval/testdata/fixture/` into a temporary directory under `/tmp`, and that copied directory becomes the worker CWD for the suite.
 The seeded fixture contains `main.go`, `helpers.py`, `scripts/count.sh`, `scripts/fail.sh`, and `scripts/freeze.sh`.
-This is enough to test file reads/writes, shell command execution, cross-language repo analysis, non-zero exit propagation, and freeze detection/watchdog behavior.
+This is enough to test file reads/writes, shell command execution, cross-language repo analysis, non-zero exit propagation, and timeout behavior.
 `tests/axeval/fixture/README.md` documents the intended isolation model: the fixture is treated as its own git boundary so workers cannot trivially walk up and inspect the parent agent-mux repo.
 
 ## Runner Flow
@@ -79,7 +79,7 @@ This is enough to test file reads/writes, shell command execution, cross-languag
 `startAsyncDispatch(...)` launches the process, reads exactly one stdout line, and treats that as the async acknowledgement. `dispatchAsync(...)` then parses `dispatch_id` from that ack and runs `agent-mux result <id> --json` to collect the final result.
 ### Async With Steering
 `dispatchAsyncSteer(...)` starts async dispatch, waits `DelayBeforeSteer`, runs `agent-mux steer <dispatch_id> <action> [message]`, then collects with `result --json`, or `status --json` after abort.
-Current steering actions covered by cases are `nudge`, `abort`, and `redirect`. `extend` is explicitly left as a TODO because a reliable timing-based integration test has not been built.
+Current steering actions covered by cases are `nudge`, `abort`, and `redirect`.
 ### CLI Mode
 `dispatchWithFlags(...)` covers features that cannot be expressed purely through `--stdin`, including `--skill`, `--recover`, `--context-file`, lifecycle subcommands, config introspection, and preview subcommands.
 

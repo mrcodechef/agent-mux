@@ -100,7 +100,7 @@ The shared event envelope is:
 }
 ```
 
-Common event types include `dispatch_start`, `dispatch_end`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `file_read`, `command_run`, `progress`, `timeout_warning`, `frozen_warning`, `long_command_detected`, `info`, `warning`, `error`, and `coordinator_inject`.
+Common event types include `dispatch_start`, `dispatch_end`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `file_read`, `command_run`, `progress`, `timeout_warning`, `info`, `warning`, `error`, and `coordinator_inject`.
 
 ## Cross-References
 

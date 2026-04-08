@@ -132,3 +132,19 @@ func (p *Process) ExitCode() int {
 	}
 	return -1
 }
+
+// WasSignaled reports whether the process was terminated by a signal.
+// If true, returns the signal number (e.g. 9 for SIGKILL, 15 for SIGTERM).
+// Go's ExitCode() returns -1 for signaled processes, so this method uses
+// the underlying syscall.WaitStatus to detect the actual signal.
+func (p *Process) WasSignaled() (signaled bool, signal int) {
+	if p.cmd.ProcessState == nil {
+		return false, 0
+	}
+	if ws, ok := p.cmd.ProcessState.Sys().(syscall.WaitStatus); ok {
+		if ws.Signaled() {
+			return true, int(ws.Signal())
+		}
+	}
+	return false, 0
+}

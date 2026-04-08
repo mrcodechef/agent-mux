@@ -69,8 +69,6 @@ func runConfigRoot(args []string, stdout io.Writer) int {
 		},
 		"liveness": map[string]any{
 			"heartbeat_interval_sec": config.HeartbeatIntervalSec(),
-			"silence_warn_seconds":   config.SilenceWarnSeconds(),
-			"silence_kill_seconds":   config.SilenceKillSeconds(),
 		},
 		"models": config.DefaultModels(),
 	})

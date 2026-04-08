@@ -811,7 +811,7 @@ func sessionIDFromArtifacts(artifactDir string) string {
 }
 
 // extractKillReason scans events.jsonl for kill-related error codes
-// (frozen_killed, signal_killed, startup_failed) and returns the first found.
+// (killed_by_user, signal_killed, startup_failed) and returns the first found.
 func extractKillReason(artifactDir string) string {
 	if strings.TrimSpace(artifactDir) == "" {
 		return ""
@@ -824,7 +824,7 @@ func extractKillReason(artifactDir string) string {
 	defer f.Close()
 
 	killCodes := map[string]bool{
-		"frozen_killed":  true,
+		"killed_by_user": true,
 		"signal_killed":  true,
 		"startup_failed": true,
 	}
@@ -846,7 +846,7 @@ func extractKillReason(artifactDir string) string {
 		if evt.Type == "error" && killCodes[evt.ErrorCode] {
 			return evt.ErrorCode
 		}
-		// Also check event type directly (e.g. frozen_killed is emitted as a type).
+		// Also check event type directly (e.g. killed_by_user is emitted as a type).
 		if killCodes[evt.Type] {
 			return evt.Type
 		}

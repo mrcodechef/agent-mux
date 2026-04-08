@@ -13,7 +13,6 @@ type HarnessAdapter interface {
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
 	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string
-	StdinNudge() []byte
 }
 ```
 Each method has a narrow responsibility:
@@ -25,7 +24,6 @@ Each method has a narrow responsibility:
 | `ParseEvent()` | Parses one stdout line into a normalized `HarnessEvent`. This is the main translation boundary between engine-native streams and agent-mux event types. |
 | `SupportsResume()` | Declares whether the adapter can restart from a prior session with `ResumeArgs()`. |
 | `ResumeArgs()` | Builds the engine-specific argv for resuming a known session and passing an inbox message back into the harness. |
-| `StdinNudge()` | Returns bytes to write to stdin for liveness nudging, or `nil` when the engine does not use stdin nudges. |
 Implementation notes:
 - `CodexAdapter` is effectively stateless.
 - `ClaudeAdapter` keeps a `sync.Mutex`-protected `toolInputs` map so `tool_result` events can be correlated back to the earlier `tool_use`.
@@ -164,10 +162,6 @@ gemini -p "<prompt>" -o stream-json [-m <model>] \
 ### Effort / Reasoning
 
 Gemini CLI does not support an effort or reasoning effort flag. When `EngineOpts["reasoning"]` is set (via `--reasoning` flag or profile config), `BuildArgs()` logs a warning and ignores the value. The warning message directs users to model selection as the alternative for controlling thinking depth. This matches the pattern in `CodexAdapter` where `EngineOpts["reasoning"]` maps to `-c model_reasoning_effort=<level>` — except Gemini has no equivalent flag, so the value is discarded with a diagnostic.
-
-### Stall Timeout Default
-
-`BuildArgs()` injects `stall_timeout_seconds: 60` into `engine_opts` for all Gemini dispatches unless already set. Runs that go silent for 60s are killed. Override by setting `stall_timeout_seconds` explicitly in `engine_opts`.
 
 ### System Prompt Handling
 Gemini does not get a direct system prompt flag. The adapter uses an environment-file path instead:

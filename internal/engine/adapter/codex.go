@@ -326,10 +326,6 @@ func parseItemCompleted(raw *codexEvent, evt *types.HarnessEvent) *types.Harness
 	}
 	return evt
 }
-func (a *CodexAdapter) StdinNudge() []byte {
-	return []byte("\n")
-}
-
 func (a *CodexAdapter) SupportsResume() bool {
 	return true
 }

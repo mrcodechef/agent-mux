@@ -192,8 +192,9 @@ Mid-flight control for running dispatches:
 ```bash
 agent-mux steer <id> redirect "Narrow to the parser module only"
 agent-mux steer <id> nudge
-agent-mux steer <id> extend 300
 agent-mux steer <id> abort
+# Both argument orderings work:
+agent-mux steer abort <id>
 ```
 
 Delivery varies by engine:
@@ -278,4 +279,5 @@ Claude Code's Bash tool defaults to 120s (2 minutes). Agent-mux dispatches can r
 | [recovery-guide.md](references/recovery-guide.md) | recovery flow, runtime layout, watchdog |
 | [prompting-guide.md](references/prompting-guide.md) | prompt shapes, auto preamble, workflows |
 | [config-and-profiles.md](references/config-and-profiles.md) | profile discovery, frontmatter, hooks, skills |
-| [gemini-specifics.md](references/gemini-specifics.md) | Gemini approval mode, model selection, stall timeout, resume quirks, tool support |
+| [gemini-specifics.md](references/gemini-specifics.md) | Gemini approval mode, model selection, filesystem access, resume quirks, tool support |
+| [worker-diagnostics.md](references/worker-diagnostics.md) | Diagnosing silent workers, false-alarm patterns, decision framework |

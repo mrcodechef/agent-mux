@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,11 +23,17 @@ func runSteerCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) < 2 {
 		return emitSteerError(stdout, 2, "invalid_args",
 			"steer requires: <dispatch_id> <action> [message/value]",
-			"Actions: abort, nudge, redirect, extend")
+			"Actions: abort, nudge, redirect")
 	}
 
 	ref := strings.TrimSpace(args[0])
 	action := strings.TrimSpace(args[1])
+
+	// Detect reversed argument order: "steer status <id>" → swap to canonical form.
+	if isSteerAction(ref) && !isSteerAction(action) {
+		ref, action = action, ref
+	}
+
 	rest := args[2:]
 
 	resolved, err := resolveDispatchReference(ref)
@@ -55,12 +60,10 @@ func runSteerCommand(args []string, stdout, stderr io.Writer) int {
 		return steerNudge(dispatchID, artifactDir, rest, stdout)
 	case "redirect":
 		return steerRedirect(dispatchID, artifactDir, rest, stdout)
-	case "extend":
-		return steerExtend(dispatchID, artifactDir, rest, stdout)
 	default:
 		return emitSteerError(stdout, 2, "invalid_args",
 			fmt.Sprintf("unknown steer action %q", action),
-			"Actions: abort, nudge, redirect, extend")
+			"Actions: abort, nudge, redirect")
 	}
 }
 
@@ -120,45 +123,13 @@ func steerRedirect(idPrefix, artifactDir string, rest []string, stdout io.Writer
 	return deliverSteer(idPrefix, artifactDir, "redirect", message, stdout)
 }
 
-func steerExtend(idPrefix, artifactDir string, rest []string, stdout io.Writer) int {
-	if len(rest) == 0 {
-		return emitSteerError(stdout, 2, "invalid_args",
-			"extend requires a seconds value",
-			"Usage: ax steer <id> extend 300")
-	}
-
-	seconds, err := strconv.Atoi(strings.TrimSpace(rest[0]))
-	if err != nil || seconds <= 0 {
-		return emitSteerError(stdout, 1, "invalid_input",
-			fmt.Sprintf("invalid seconds value %q: must be a positive integer", rest[0]), "")
-	}
-
-	cf := ControlFile{
-		ExtendKillSeconds: seconds,
-		UpdatedAt:         time.Now().UTC(),
-	}
-	if err := writeControlFile(artifactDir, &cf); err != nil {
-		return emitSteerError(stdout, 1, "write_failed",
-			fmt.Sprintf("write control.json: %v", err), "")
-	}
-
-	writeCompactJSON(stdout, map[string]any{
-		"action":      "extend",
-		"dispatch_id": idPrefix,
-		"seconds":     seconds,
-		"delivered":   true,
-	})
-	return 0
-}
-
 // --- control file types and I/O ---
 
 // ControlFile is the steering control structure written to control.json
 // in the artifact directory. Read by the watchdog on each tick.
 type ControlFile struct {
-	Abort             bool      `json:"abort,omitempty"`
-	ExtendKillSeconds int       `json:"extend_kill_seconds,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	Abort     bool      `json:"abort,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 const controlFileName = "control.json"
@@ -271,4 +242,13 @@ func writeInboxSteer(artifactDir, action, message string) error {
 	default:
 		return steer.WriteInbox(artifactDir, message)
 	}
+}
+
+// isSteerAction returns true if s is one of the valid steer action verbs.
+func isSteerAction(s string) bool {
+	switch s {
+	case "abort", "nudge", "redirect":
+		return true
+	}
+	return false
 }

@@ -253,8 +253,8 @@ func TestNewDispatchError(t *testing.T) {
 		t.Errorf("example = %q, want empty for override path", err.Example)
 	}
 
-	err = NewDispatchError("frozen_killed", "", "")
-	if err.Message != "Worker killed after prolonged silence." {
+	err = NewDispatchError("killed_by_user", "", "")
+	if err.Message != "Process was terminated by an external signal." {
 		t.Errorf("message = %q", err.Message)
 	}
 	if err.Hint == "" || err.Example == "" {

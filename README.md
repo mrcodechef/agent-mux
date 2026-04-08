@@ -114,7 +114,7 @@ Engine CLIs must be installed separately -- agent-mux dispatches to them, it doe
 - **Event streaming** -- 15 NDJSON event types on stderr: `dispatch_start`, `heartbeat`, `tool_start`, `tool_end`, `file_write`, `timeout_warning`, and more.
 - **Hooks** -- Pattern-based deny/warn rules evaluated on harness events.
 - **Skill injection** -- Load `SKILL.md` runbooks into the dispatch prompt. Skills carry scripts, references, and setup.
-- **Liveness supervision** -- 5-second watchdog cycle detects hung harnesses. Process-group signals ensure grandchildren die with the harness.
+- **Timeout and diagnostics** -- Global dispatch timeout is the sole hard backstop. Workers are trusted to complete within their timeout. 5-second watchdog cycle updates `status.json` for live observability. Process-group signals ensure grandchildren die with the harness. Forensic tools (`status.json`, `events.jsonl`, `steer nudge`) replace automatic kills for silent-worker diagnosis.
 - **Durable persistence** -- Every dispatch writes `meta.json` and `result.json` under `~/.agent-mux/dispatches/<id>/`. Artifact directory created before the harness starts.
 - **config prompts** -- `agent-mux config prompts` lists all discoverable profiles with engine, model, effort, timeout, and description.
 

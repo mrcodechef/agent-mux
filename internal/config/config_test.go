@@ -60,20 +60,6 @@ func TestHeartbeatIntervalSecEnv(t *testing.T) {
 	}
 }
 
-func TestSilenceWarnSecondsDefault(t *testing.T) {
-	t.Setenv("AGENT_MUX_SILENCE_WARN_SECONDS", "")
-	if got := SilenceWarnSeconds(); got != 90 {
-		t.Fatalf("SilenceWarnSeconds() = %d, want 90", got)
-	}
-}
-
-func TestSilenceKillSecondsDefault(t *testing.T) {
-	t.Setenv("AGENT_MUX_SILENCE_KILL_SECONDS", "")
-	if got := SilenceKillSeconds(); got != 180 {
-		t.Fatalf("SilenceKillSeconds() = %d, want 180", got)
-	}
-}
-
 func TestDefaultModels(t *testing.T) {
 	models := DefaultModels()
 	if len(models["codex"]) == 0 {

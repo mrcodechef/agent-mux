@@ -19,7 +19,7 @@ Every dispatch has:
 | `events.jsonl` | Full NDJSON event log |
 | `status.json` | Live status snapshot |
 | `host.pid` | PID of the async host process |
-| `control.json` | Abort and extend requests |
+| `control.json` | Abort requests |
 | `inbox.md` | NDJSON coordinator inbox |
 | `stdin.pipe` | Unix FIFO for soft Codex steering |
 | worker files | Any artifacts written by the worker |
@@ -121,19 +121,11 @@ That is why steer and `--signal` are not tied to a single polling path.
 
 ---
 
-## Liveness Watchdog
+## Liveness
 
-### Silence thresholds
-
-| Threshold | Default | Action |
-|-----------|---------|--------|
-| `silence_warn_seconds` | 90s | emit `frozen_warning`, optionally send stdin nudge |
-| `silence_kill_seconds` | 180s | kill the worker and fail the dispatch |
-
-Config source: `[liveness]`.
-
-Per-dispatch override: `engine_opts.heartbeat_interval_sec`,
-`engine_opts.silence_warn_seconds`, `engine_opts.silence_kill_seconds`.
+The global dispatch timeout (`timeout_sec` + `grace_sec`) is the hard backstop.
+There is no automatic silence-based kill. Use `ax steer <id> abort` for manual
+kill when a worker appears stuck.
 
 ### Heartbeats
 
@@ -146,16 +138,15 @@ Heartbeat interval default: `15s`.
 3. start the grace timer
 4. if grace expires, stop the worker and return `timed_out`
 
-### Frozen process handling
+### Worker Diagnostics
 
-- if silence crosses the warn threshold, emit `frozen_warning`
-- if the adapter supports stdin nudges, send one
-- if silence crosses the kill threshold, emit `frozen_killed` and terminate the worker
+When a worker goes silent, operators diagnose through these steps:
 
-### Long commands
-
-Long-running commands can temporarily extend the effective kill threshold and
-emit `long_command_detected`.
+1. **Check `status.json`** — the `last_activity` field shows what the worker was last doing
+2. **Check `events.jsonl`** — the last events show the state before silence began
+3. **Use `ax steer <id> nudge "are you still working?"`** to probe the worker
+4. **Use `ax steer <id> abort`** to manually kill if needed
+5. **Check Codex/Gemini session files** for internal state (reasoning events happen internally even when NDJSON is silent)
 
 ---
 

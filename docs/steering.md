@@ -78,13 +78,14 @@ agent-mux steer 01JQXYZ redirect "focus on the tests, skip the refactor"
 
 Redirects the worker with new instructions. On a live Codex run with a ready FIFO bridge, agent-mux writes a soft-steer envelope to `stdin.pipe`. Otherwise it falls back to inbox delivery with a `[REDIRECT]` prefix. The instructions argument is required.
 
-### steer extend
+### Argument Order
+
+Both orderings are accepted:
 
 ```bash
-agent-mux steer 01JQXYZ extend 300
+agent-mux steer 01JQXYZ nudge "message"   # canonical: <id> <action>
+agent-mux steer nudge 01JQXYZ "message"   # reversed: <action> <id> — auto-detected and swapped
 ```
-
-Extends the watchdog kill threshold by writing `control.json` with `extend_kill_seconds`. The watchdog reads this file on each tick and applies the extension. Useful when a legitimate long-running operation needs more time than the configured `silence_kill_seconds`.
 
 ## FIFO Soft Steering For Codex
 

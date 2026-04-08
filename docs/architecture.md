@@ -128,7 +128,6 @@ type HarnessAdapter interface {
 	ParseEvent(line string) (*HarnessEvent, error)
 	SupportsResume() bool
 	ResumeArgs(spec *DispatchSpec, sessionID string, message string) []string
-	StdinNudge() []byte
 }
 ```
 

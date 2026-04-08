@@ -76,19 +76,18 @@ func buildErrorScenarios() []errorScenario {
 4. Is the corrected command syntactically valid?`,
 		},
 		{
-			Name:            "frozen-killed-narrow-prompt",
-			ErrorCode:       "frozen_killed",
+			Name:            "killed-by-user-rerun",
+			ErrorCode:       "killed_by_user",
 			OriginalCommand: `agent-mux -e codex --cwd /repo "Analyze every file in this repository and write comprehensive documentation"`,
-			ErrorJSON: mustMarshalError("frozen_killed",
-				"Worker killed after prolonged silence.",
-				"Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
-				"Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
-				true),
-			ChecklistItems: `1. Does the corrected command have a narrower/more specific prompt than the original?
+			ErrorJSON: mustMarshalError("killed_by_user",
+				"Process was terminated by an external signal.",
+				"Process was terminated by an external signal (SIGTERM/SIGKILL). This is not a worker failure — the process was killed by the operator or the OS.",
+				"If you still need the work, rerun the dispatch. Check system logs if the kill was unexpected.",
+				false),
+			ChecklistItems: `1. Does the corrected command rerun the same dispatch or a narrowed variant?
 2. Does the corrected command still target the same general goal?
-3. Did the agent either narrow the prompt OR extend the timeout?
-4. Did the agent recognize this was a frozen/stuck issue, not a prompt error?
-5. Is the corrected command syntactically valid?`,
+3. Did the agent recognize this was an external kill, not a prompt error?
+4. Is the corrected command syntactically valid?`,
 		},
 		{
 			Name:            "config-error-bad-profile",

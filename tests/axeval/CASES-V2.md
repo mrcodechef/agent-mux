@@ -37,9 +37,7 @@
 | Event log persistence (events.jsonl) | partial | silent-default | — |
 | Stream mode filtering (silent vs stream) | yes | silent-default, stream-flag | — |
 | **Liveness** | | | |
-| Frozen detection + kill | yes | freeze-watchdog | — |
-| Stdin nudge on frozen | yes | freeze-stdin-nudge | — |
-| Long-command protection | **no** | — | cargo/make builds killed as frozen |
+| Global dispatch timeout | yes | (timeout cases) | — |
 | Tool-boundary-aware steering | **no** | — | Steering fires mid-tool, corrupts state |
 | **Lifecycle** | | | |
 | list (basic) | **no** | — | Agents can't find prior dispatches |
@@ -51,7 +49,7 @@
 | Nudge delivery | yes | steer-nudge | — |
 | Redirect delivery + framing | yes | steer-redirect | — |
 | Abort (SIGTERM + control.json) | yes | steer-abort | — |
-| Extend (watchdog override) | **no** | — | Extend silently ignored |
+| killed_by_user status | **no** | — | SIGTERM/SIGKILL exits misclassified |
 | **Async** | | | |
 | --async ack shape | yes | async-dispatch | — |
 | host.pid written | **no** | — | Orphan detection broken |
@@ -64,7 +62,7 @@
 | **Error Handling** | | | |
 | engine_not_found | yes | bad-engine | — |
 | model_not_found | yes | bad-model | — |
-| frozen_killed | yes | freeze-watchdog | — |
+| killed_by_user | **no** | — | SIGTERM/SIGKILL exits should map to killed_by_user |
 | max_depth_exceeded | **no** | — | Recursive dispatches loop forever |
 
 ---

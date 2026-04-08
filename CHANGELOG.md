@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [3.4.0] - 2026-04-08
+
+### Removed
+- **Automatic stall/freeze detection** — workers are no longer killed for stdout silence. Global dispatch timeout is the sole hard backstop. This eliminates false kills during Codex API roundtrips (106K-190K token contexts take 2-8 min with zero NDJSON output) and Gemini deep thinking.
+- **`steer extend` command** — no kill threshold to extend.
+- **`StdinNudge` from adapter interface** — was only used by stall detection.
+
+### Added
+- **Gemini `--include-directories $HOME,/tmp` by default** — broad filesystem access for context files and artifacts. Gemini workers can now read `--context-file` content and any file under the home directory.
+- **`steer` accepts both argument orderings** — `steer <id> <action>` and `steer <action> <id>` both work. AI agents consistently got the argument order wrong; this fixes it.
+- **`killed_by_user` status for SIGTERM/SIGKILL exits** — replaces generic `failed`. Uses proper Go WaitStatus signal detection (exit 137/143).
+- **Worker diagnostics guide** — `skill/references/worker-diagnostics.md` teaches operators how to diagnose silent workers vs. genuinely stalled ones, replacing automatic kills with forensic tools.
+
+### Fixed
+- **Gemini dispatches can now read `--context-file` content** — previously blocked by workspace sandbox restricting reads to `--cwd`.
+- **Signal-terminated workers properly classified** — via Go WaitStatus detection instead of generic error codes.
+
 ## [3.3.0] - 2026-04-06
 
 ### Added

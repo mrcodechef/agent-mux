@@ -19,11 +19,20 @@ behavior.
 | prompt (positional) | `-p "<prompt>"` | Always passed via `-p` flag |
 | *(output format)* | `-o stream-json` | Always set by adapter |
 
+### Default `--include-directories`
+
+Gemini dispatches automatically include `$HOME,/tmp` in `--include-directories`.
+This gives Gemini workers broad filesystem read access for context files,
+artifacts, and any file under the home directory -- fixing the previous issue
+where `--context-file` content was blocked by the workspace sandbox.
+
+Additional directories from `--add-dir` are appended to this default set.
+
 Invocation shape produced by the adapter:
 
 ```bash
 gemini -p "<prompt>" -o stream-json [-m <model>] \
-  --approval-mode <mode> [--include-directories <dir1,dir2,...>]
+  --approval-mode <mode> --include-directories $HOME,/tmp[,<extra-dirs>]
 ```
 
 ---
@@ -65,25 +74,6 @@ discards the value:
 | `gemini-3.1-pro-preview` | Latest deep model. Good default for deep analysis |
 
 Rule of thumb: Flash for reads and light tasks, Pro for synthesis and review.
-
----
-
-## Stall Timeout
-
-The adapter injects `stall_timeout_seconds: 60` into `engine_opts` for all
-Gemini dispatches unless already set. Runs that go silent for 60 seconds are
-killed by the watchdog.
-
-Override:
-
-```bash
-# via engine_opts in --stdin JSON
-{"engine_opts": {"stall_timeout_seconds": 120}, ...}
-```
-
-This is separate from the dispatch-level `timeout_sec` (total run time) and
-the liveness `silence_kill_seconds` (general frozen-process threshold). The
-stall timeout is Gemini-specific and shorter than the general liveness default.
 
 ---
 

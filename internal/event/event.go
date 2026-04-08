@@ -92,10 +92,7 @@ var silentAllowedTypes = map[string]bool{
 	"dispatch_start":        true,
 	"dispatch_end":          true,
 	"error":                 true,
-	"frozen_warning":        true,
-	"frozen_killed":         true,
 	"timeout_warning":       true,
-	"long_command_detected": true,
 	"response_truncated":    true,
 	"preview":               true,
 }
@@ -175,16 +172,6 @@ func (e *Emitter) EmitProgress(message string) error {
 }
 func (e *Emitter) EmitTimeoutWarning(message string) error {
 	return e.emitType("timeout_warning", Event{Message: message})
-}
-func (e *Emitter) EmitFrozenWarning(silenceSeconds int, message string) error {
-	return e.emitType("frozen_warning", Event{SilenceSeconds: silenceSeconds, Message: message})
-}
-func (e *Emitter) EmitLongCommandDetected(command string, timeoutSeconds int) error {
-	return e.emitType("long_command_detected", Event{
-		Command:        command,
-		TimeoutSeconds: timeoutSeconds,
-		Message:        fmt.Sprintf("Long-running command detected: %s. Silence threshold extended to %ds.", command, timeoutSeconds),
-	})
 }
 func (e *Emitter) EmitError(code, message string) error {
 	return e.emitType("error", Event{ErrorCode: code, Message: message})

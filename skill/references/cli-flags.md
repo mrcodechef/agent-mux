@@ -81,7 +81,7 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `agent-mux result <id> [flags]` | stored response or artifact list |
 | `agent-mux inspect <id> [--json]` | record + response + artifacts + meta |
 | `agent-mux wait <id> [flags]` | block until `result.json` exists |
-| `agent-mux steer <id> <action> [args]` | mid-flight control |
+| `agent-mux steer <id> <action> [args]` | mid-flight control (both `steer <id> <action>` and `steer <action> <id>` work) |
 | `agent-mux config [subcommand] [flags]` | config introspection |
 
 ### Config subcommands
@@ -117,7 +117,6 @@ or similar dispatch flags. Put those fields in the JSON object.
 | `abort` | none | SIGTERM if `host.pid` is alive, else `control.json` |
 | `nudge` | `[message]` | Default wrap-up message if omitted |
 | `redirect` | `"<instructions>"` | Required |
-| `extend` | `<seconds>` | Positive integer |
 
 ---
 
@@ -165,11 +164,7 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `max-turns` | int | Claude turn cap |
 | `add-dir` | string[] | Extra writable/include directories |
 | `heartbeat_interval_sec` | int | Override heartbeat cadence (default 15s) |
-| `silence_warn_seconds` | int | Override frozen warning threshold (default 90s) |
-| `silence_kill_seconds` | int | Override frozen kill threshold (default 180s) |
-| `long_command_silence_seconds` | int | Extended kill threshold while a known long-running command is active (default 540s) |
 | `max_steer_wait_seconds` | int | Maximum seconds to wait for a tool to finish before force-delivering a steer message (default 120s) |
-| `long_command_prefixes` | string | Comma-separated extra command prefixes that qualify as long-running (extends built-in list) |
 
 ---
 
@@ -183,7 +178,7 @@ Pipe one JSON object to `agent-mux --stdin`. `prompt` is required.
 | `<artifact_dir>/status.json` | live status |
 | `<artifact_dir>/events.jsonl` | full NDJSON event log |
 | `<artifact_dir>/host.pid` | async host PID |
-| `<artifact_dir>/control.json` | abort and extend requests |
+| `<artifact_dir>/control.json` | abort requests |
 | `<artifact_dir>/inbox.md` | NDJSON coordinator inbox |
 | `<artifact_dir>/stdin.pipe` | Unix FIFO for soft Codex steering |
 | `<artifact_dir>/*` | worker-created artifact files |

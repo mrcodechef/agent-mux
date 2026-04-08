@@ -1823,3 +1823,49 @@ func TestBuildDispatchSpecLeavesEffortEmptyWithoutExplicitFlag(t *testing.T) {
 		t.Errorf("spec.Effort = %q, want empty string", spec.Effort)
 	}
 }
+
+func TestSteerReversedArgOrder(t *testing.T) {
+	// steer nudge <dispatch_id> should work the same as steer <dispatch_id> nudge
+	dispatchID, artifactDir := prepareSteerDispatchFixture(t, false)
+
+	// Canonical order: <dispatch_id> <action>
+	var stdoutCanonical bytes.Buffer
+	exitCanonical := runSteerCommand([]string{dispatchID, "nudge", "canonical order"}, &stdoutCanonical, ioDiscard{})
+	if exitCanonical != 0 {
+		t.Fatalf("canonical order: exit code = %d, want 0; stdout=%q", exitCanonical, stdoutCanonical.String())
+	}
+	canonicalResult := decodeJSONMap(t, stdoutCanonical.Bytes())
+
+	// Drain the inbox before testing reversed order
+	if _, err := steer.ReadInbox(artifactDir); err != nil {
+		t.Fatalf("drain inbox: %v", err)
+	}
+
+	// Reversed order: <action> <dispatch_id>
+	var stdoutReversed bytes.Buffer
+	exitReversed := runSteerCommand([]string{"nudge", dispatchID, "reversed order"}, &stdoutReversed, ioDiscard{})
+	if exitReversed != 0 {
+		t.Fatalf("reversed order: exit code = %d, want 0; stdout=%q", exitReversed, stdoutReversed.String())
+	}
+	reversedResult := decodeJSONMap(t, stdoutReversed.Bytes())
+
+	// Both should succeed with same mechanism and dispatch_id
+	if canonicalResult["mechanism"] != reversedResult["mechanism"] {
+		t.Errorf("mechanism mismatch: canonical=%v, reversed=%v", canonicalResult["mechanism"], reversedResult["mechanism"])
+	}
+	if canonicalResult["dispatch_id"] != reversedResult["dispatch_id"] {
+		t.Errorf("dispatch_id mismatch: canonical=%v, reversed=%v", canonicalResult["dispatch_id"], reversedResult["dispatch_id"])
+	}
+	if reversedResult["action"] != "nudge" {
+		t.Errorf("reversed action = %v, want nudge", reversedResult["action"])
+	}
+
+	// Verify the nudge was actually delivered to the inbox
+	messages, err := steer.ReadInbox(artifactDir)
+	if err != nil {
+		t.Fatalf("ReadInbox: %v", err)
+	}
+	if len(messages) != 1 || messages[0].Message != "[NUDGE] reversed order" {
+		t.Fatalf("messages = %#v, want [NUDGE] reversed order", messages)
+	}
+}

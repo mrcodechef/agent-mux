@@ -153,7 +153,8 @@ soft-delivery channels:
 - FIFO named pipe at `<artifact_dir>/stdin.pipe` on Unix
 
 `agent-mux steer <dispatch_id> <action> [args]` accepts a full dispatch ID or
-a unique prefix.
+a unique prefix. Both argument orderings work: `steer <id> <action>` and
+`steer <action> <id>`.
 
 ### Steering delivery by engine
 
@@ -223,20 +224,6 @@ Typical JSON response:
 {"action":"redirect","dispatch_id":"01K...","mechanism":"inbox","delivered":true}
 ```
 
-### steer extend
-
-Extend the watchdog kill threshold by writing `control.json`.
-
-```bash
-agent-mux steer 01K... extend 300
-```
-
-Response:
-
-```json
-{"action":"extend","dispatch_id":"01K...","seconds":300,"delivered":true}
-```
-
 ### Steering mechanisms
 
 | Mechanism | When used |
@@ -244,7 +231,7 @@ Response:
 | `stdin_fifo` | Codex only, running state, stdin bridge ready, host PID alive |
 | `inbox` | Fallback path for `nudge` and `redirect`; triggers resume for Claude/Gemini |
 | `sigterm` | `abort` when host PID is alive |
-| `control_file` | `abort` fallback and all `extend` requests |
+| `control_file` | `abort` fallback |
 
 ---
 

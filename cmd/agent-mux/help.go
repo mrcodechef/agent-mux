@@ -53,11 +53,14 @@ Lifecycle:
   agent-mux inspect <dispatch_id> [--json]
   agent-mux wait [--poll 30s] <dispatch_id>
 
-Steer actions:
-  agent-mux steer <dispatch_id> abort
-  agent-mux steer <dispatch_id> nudge ["message"]
-  agent-mux steer <dispatch_id> redirect "<instructions>"
-  agent-mux steer <dispatch_id> extend <seconds>
+Steer actions (both arg orderings work):
+  agent-mux steer <dispatch_id> <action>
+  agent-mux steer <action> <dispatch_id>
+
+  Actions:
+    abort                     Kill the running dispatch
+    nudge ["message"]         Send a wrap-up nudge
+    redirect "<instructions>" Redirect the worker mid-flight
 
 Other control paths:
   agent-mux --signal <dispatch_id> "<message>"

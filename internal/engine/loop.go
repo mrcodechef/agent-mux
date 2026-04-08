@@ -234,7 +234,6 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		turnCount         int
 		lastError         *types.HarnessEvent
 		lastActivity      = time.Now()
-		frozenWarned      bool
 		terminalState     string // "", "timed_out", "failed", "interrupted"
 		softTimedOut      bool
 		streamScanErr     error
@@ -242,7 +241,6 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		sawResponse       bool
 		toolsUsedCount    int
 		filesChangedCount int
-		toolExecuting     bool // true between tool start and tool end; pauses stall timer
 	)
 	parseErrorCount := 0
 
@@ -254,19 +252,11 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		return true
 	}
 
-	silenceWarn := intEngineOpt(spec, "silence_warn_seconds", 90)
-	silenceKill := intEngineOpt(spec, "silence_kill_seconds", 180)
-	longCommandSilence := intEngineOpt(spec, "long_command_silence_seconds", 540)
 	maxSteerWait := intEngineOpt(spec, "max_steer_wait_seconds", 120)
-	stallTimeout := intEngineOpt(spec, "stall_timeout_seconds", 0) // 0 = disabled
-	longCommandExtraPrefixes := parseLongCommandPrefixes(spec)
 	var (
-		activeCommand       string
-		commandStartTime    time.Time
-		longCommandExtended bool
-		steerPendingSince   time.Time // when pendingMessages first became non-empty
+		activeCommand     string
+		steerPendingSince time.Time // when pendingMessages first became non-empty
 	)
-	_ = commandStartTime // used for future diagnostics
 	stopHeartbeat, updateActivity := emitter.HeartbeatTicker(intEngineOpt(spec, "heartbeat_interval_sec", 15))
 	defer stopHeartbeat()
 	signals := make(chan loopSignal, 512)
@@ -289,7 +279,6 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		statusFilesChanged := 0
 		mu.Lock()
 		lastActivity = time.Now()
-		frozenWarned = false
 		runReadyForRestart = true
 		switch evt.Kind {
 		case types.EventSessionStart:
@@ -299,15 +288,12 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			statusLastActivity = "session started"
 
 		case types.EventToolStart:
-			toolExecuting = true
 			if evt.Tool != "" {
 				activity.ToolCalls = append(activity.ToolCalls, evt.Tool)
 				toolsUsedCount++
 			}
 			if evt.Command != "" {
 				activeCommand = evt.Command
-				commandStartTime = time.Now()
-				longCommandExtended = false
 				_ = emitter.EmitToolStart(evt.Tool, evt.Command)
 				updateActivity(fmt.Sprintf("running: %s", truncate(evt.Command, 60)))
 			} else {
@@ -316,10 +302,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			}
 
 		case types.EventToolEnd:
-			toolExecuting = false
 			activeCommand = ""
-			commandStartTime = time.Time{}
-			longCommandExtended = false
 			_ = emitter.EmitToolEnd(evt.Tool, evt.DurationMS)
 
 		case types.EventFileWrite:
@@ -333,13 +316,10 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			_ = emitter.EmitFileRead(evt.FilePath)
 
 		case types.EventCommandRun:
-			toolExecuting = true
 			activity.ToolCalls = appendUnique(activity.ToolCalls, evt.Tool)
 			activity.CommandsRun = appendUnique(activity.CommandsRun, evt.Command)
 			if evt.Command != "" {
 				activeCommand = evt.Command
-				commandStartTime = time.Now()
-				longCommandExtended = false
 			}
 			_ = emitter.EmitCommandRun(evt.Command)
 			updateActivity(fmt.Sprintf("running: %s", truncate(evt.Command, 60)))
@@ -354,10 +334,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			lastResponse = evt.Text
 			sawResponse = true
 			// A response implies any in-flight tool has completed.
-			toolExecuting = false
 			activeCommand = ""
-			commandStartTime = time.Time{}
-			longCommandExtended = false
 			if evt.Tokens != nil {
 				totalTokens = evt.Tokens
 			}
@@ -377,10 +354,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case types.EventTurnComplete:
 			turnCount++
 			// A turn completing implies any in-flight tool has also finished.
-			toolExecuting = false
 			activeCommand = ""
-			commandStartTime = time.Time{}
-			longCommandExtended = false
 			if evt.Tokens != nil {
 				totalTokens = evt.Tokens
 			}
@@ -664,7 +638,6 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		restarting = false
 		mu.Lock()
 		lastActivity = time.Now()
-		frozenWarned = false
 		mu.Unlock()
 		updateActivity("resumed session")
 		return true
@@ -821,7 +794,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 			if forceBuildResult {
 				goto buildResult
 			}
-			// Read control.json for mid-flight steering signals.
+			// Read control.json for mid-flight abort signals.
 			if cf := readControlFile(spec.ArtifactDir); cf != nil {
 				if cf.Abort && setTerminal("failed") {
 					_ = emitter.EmitError("abort_requested", "Abort requested via control file.")
@@ -830,68 +803,18 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 					<-currentRun.streamDone
 					goto buildResult
 				}
-				if cf.ExtendKillSeconds > 0 && time.Since(cf.UpdatedAt).Seconds() < 120 {
-					if cf.ExtendKillSeconds > silenceKill {
-						silenceKill = cf.ExtendKillSeconds
-					}
-				}
 			}
 
 			mu.Lock()
-			silence := int(time.Since(lastActivity).Seconds())
-			effectiveKill := silenceKill
-			if activeCommand != "" && isLongRunningCommand(activeCommand, longCommandExtraPrefixes) {
-				effectiveKill = longCommandSilence
-				if !longCommandExtended {
-					longCommandExtended = true
-					_ = emitter.EmitLongCommandDetected(activeCommand, longCommandSilence)
-				}
-			}
-			shouldWarn := silence >= silenceWarn && !frozenWarned
-			if shouldWarn {
-				frozenWarned = true
-			}
-			statusActivity := fmt.Sprintf("last activity %ds ago", silence)
+			statusActivity := fmt.Sprintf("last activity %ds ago", int(time.Since(lastActivity).Seconds()))
 			if activeCommand != "" {
 				statusActivity = fmt.Sprintf("running: %s", truncate(activeCommand, 60))
 			}
-			stallPaused := toolExecuting // pause stall timer while a tool is executing
 			statusToolsUsed := toolsUsedCount
 			statusFilesChanged := filesChangedCount
 			mu.Unlock()
 			// Atomic status.json write for pull-based status.
 			_ = writeRunningStatus(spec.ArtifactDir, spec.DispatchID, sessionID, startTime, statusActivity, statusToolsUsed, statusFilesChanged, stdinPipeReady)
-			// Stall timeout: fires on sustained silence when configured, producing
-			// a distinct stall_timeout status. Checked before frozen_killed so the
-			// more specific status wins when stallTimeout < effectiveKill.
-			// Paused while a tool is executing — legitimate tool runs (e.g. docker build)
-			// can be silent for minutes without indicating a stall.
-			if stallTimeout > 0 && !stallPaused && silence >= stallTimeout && setTerminal("stall_timeout") {
-				elapsed := int(time.Since(startTime).Seconds())
-				msg := fmt.Sprintf("No NDJSON output for %ds (stall timeout). Total elapsed: %ds. Process killed.", silence, elapsed)
-				_ = emitter.EmitError("stall_timeout", msg)
-				dispatchErr = dispatch.NewDispatchError("stall_timeout", msg, "Increase stall_timeout_seconds in engine_opts or investigate why the CLI is silent.")
-				_ = currentRun.proc.GracefulStop(5)
-				<-currentRun.streamDone
-				closeSoftBridge()
-				goto buildResult
-			}
-			if silence >= effectiveKill && setTerminal("failed") {
-				_ = emitter.EmitError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence))
-				dispatchErr = dispatch.NewDispatchError("frozen_killed", fmt.Sprintf("No harness events for %ds. Likely frozen. Process terminated.", silence), "")
-				_ = currentRun.proc.GracefulStop(5)
-				<-currentRun.streamDone
-				closeSoftBridge()
-				goto buildResult
-			}
-			if shouldWarn {
-				_ = emitter.EmitFrozenWarning(silence, fmt.Sprintf("No harness events for %ds.", silence))
-				if nudge := e.adapter.StdinNudge(); nudge != nil && currentRun != nil && currentRun.stdinPipe != nil {
-					if _, err := currentRun.stdinPipe.Write(nudge); err == nil {
-						_ = emitter.EmitInfo("stdin_nudge", "Sent stdin nudge to frozen process")
-					}
-				}
-			}
 
 		case <-inboxTicker.C:
 			enqueueInboxMessages()
@@ -954,14 +877,11 @@ buildResult:
 	case "timed_out":
 		return finalizeTimedOut(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 
-	case "stall_timeout":
-		return finalizeStallTimeout(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
-
 	case "failed":
 		if dispatchErr != nil {
 			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatchErr), nil
 		}
-		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc.ExitCode(), currentStderr.String(), false)), nil
+		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), false)), nil
 
 	case "interrupted":
 		return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, dispatch.NewDispatchError("interrupted", "Dispatch interrupted by caller cancellation.", "")), nil
@@ -986,7 +906,7 @@ buildResult:
 		}
 
 		if procErr != nil {
-			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc.ExitCode(), currentStderr.String(), true)), nil
+			return finalizeFailed(spec, e.annotations, emitter, response, act, metadata, durationMS, failureFromEventOrProcess(errEvt, currentRun.proc, currentStderr.String(), true)), nil
 		}
 		return finalizeCompleted(spec, e.annotations, emitter, response, act, metadata, durationMS), nil
 	}
@@ -1043,33 +963,6 @@ func finalizeTimedOut(spec *types.DispatchSpec, annotations types.DispatchAnnota
 	emitResponseTruncated(emitter, result)
 	if emitter != nil {
 		_ = emitter.EmitDispatchEnd("timed_out", durationMS)
-	}
-	return result
-}
-
-func finalizeStallTimeout(spec *types.DispatchSpec, annotations types.DispatchAnnotations, emitter *event.Emitter, response string, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64, dispErr *types.DispatchError) *types.DispatchResult {
-	silenceSeconds := 0
-	if dispErr != nil {
-		// Extract silence duration from error message for the result builder.
-		fmt.Sscanf(dispErr.Message, "No NDJSON output for %ds", &silenceSeconds)
-	}
-	result := dispatch.BuildStallTimeoutResult(spec, response, silenceSeconds, dispErr, activity, metadata, durationMS)
-	if dispErr != nil {
-		dispErr.PartialArtifacts = result.Artifacts
-	}
-	persistDispatchRecord(spec, annotations, result, response, emitter)
-	_ = dispatch.WriteStatusJSON(spec.ArtifactDir, dispatch.LiveStatus{
-		State:          "stall_timeout",
-		ElapsedS:       int(durationMS / 1000),
-		LastActivity:   "stall_timeout",
-		ToolsUsed:      len(activity.ToolCalls),
-		FilesChanged:   len(activity.FilesChanged),
-		StdinPipeReady: false,
-		DispatchID:     spec.DispatchID,
-	})
-	emitResponseTruncated(emitter, result)
-	if emitter != nil {
-		_ = emitter.EmitDispatchEnd("stall_timeout", durationMS)
 	}
 	return result
 }
@@ -1160,10 +1053,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func failureFromEventOrProcess(errEvt *types.HarnessEvent, exitCode int, stderr string, includeExitPrefix bool) *types.DispatchError {
+func failureFromEventOrProcess(errEvt *types.HarnessEvent, proc *supervisor.Process, stderr string, includeExitPrefix bool) *types.DispatchError {
 	if errEvt != nil {
 		return dispatch.NewDispatchError(errEvt.ErrorCode, errEvt.Text, "")
 	}
+	exitCode := proc.ExitCode()
 	base := "Process failed."
 	if includeExitPrefix {
 		base = fmt.Sprintf("Exit code %d.", exitCode)
@@ -1184,10 +1078,17 @@ func failureFromEventOrProcess(errEvt *types.HarnessEvent, exitCode int, stderr 
 		}
 	}
 	code := "process_killed"
-	if exitCode == 137 || exitCode == 143 {
-		code = "signal_killed"
+	// Primary: use WaitStatus to detect signal termination (Go returns -1 for
+	// ExitCode on signaled processes, so the exit code alone is unreliable).
+	if signaled, sig := proc.WasSignaled(); signaled {
+		if sig == 9 || sig == 15 { // SIGKILL or SIGTERM
+			code = "killed_by_user"
+		}
+	} else if exitCode == 137 || exitCode == 143 {
+		// Fallback: shell wrappers may translate signals to 128+signal exit codes.
+		code = "killed_by_user"
 	}
-	return dispatch.NewDispatchError(code, base, "Check engine logs.")
+	return dispatch.NewDispatchError(code, base, "")
 }
 
 func appendUnique(slice []string, item string) []string {
@@ -1216,72 +1117,10 @@ func missingFinalResponse(response string, sawResponse bool) bool {
 	return strings.TrimSpace(response) == ""
 }
 
-// longCommandPrefixes lists command prefixes known to produce long silence
-// (build tools, package managers, compilers). The watchdog extends its kill
-// threshold when the active command matches one of these.
-var longCommandPrefixes = []string{
-	"cargo",
-	"make",
-	"nvcc",
-	"go build",
-	"go test",
-	"cmake",
-	"npm install",
-	"npm run build",
-	"pip install",
-	"docker build",
-	"rustc",
-	"gcc",
-	"g++",
-	"clang",
-}
-
-// isLongRunningCommand returns true if cmd starts with a known long-running
-// build/install prefix.
-func isLongRunningCommand(cmd string, extraPrefixes []string) bool {
-	trimmed := strings.TrimSpace(cmd)
-	if trimmed == "" {
-		return false
-	}
-	for _, prefix := range longCommandPrefixes {
-		if strings.HasPrefix(trimmed, prefix) {
-			return true
-		}
-	}
-	for _, prefix := range extraPrefixes {
-		if prefix != "" && strings.HasPrefix(trimmed, strings.TrimSpace(prefix)) {
-			return true
-		}
-	}
-	return false
-}
-
-// parseLongCommandPrefixes splits a comma-separated engine opt string into
-// a slice of prefix strings, trimming whitespace from each entry.
-func parseLongCommandPrefixes(spec *types.DispatchSpec) []string {
-	if spec == nil || spec.EngineOpts == nil {
-		return nil
-	}
-	raw, ok := spec.EngineOpts["long_command_prefixes"].(string)
-	if !ok || raw == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // controlFile is the steering control structure read from control.json.
 type controlFile struct {
-	Abort             bool      `json:"abort,omitempty"`
-	ExtendKillSeconds int       `json:"extend_kill_seconds,omitempty"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	Abort     bool      `json:"abort,omitempty"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // readControlFile reads control.json from artifact dir. Returns nil on miss (no alloc).

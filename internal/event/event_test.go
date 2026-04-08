@@ -204,7 +204,7 @@ func TestStreamModeSilent(t *testing.T) {
 	defer emitter.Close()
 	emitter.SetStreamMode(StreamSilent)
 
-	// Emit 10 different event types
+	// Emit 9 different event types
 	_ = emitter.Emit(Event{Type: "heartbeat"})
 	_ = emitter.Emit(Event{Type: "tool_start"})
 	_ = emitter.Emit(Event{Type: "tool_end"})
@@ -213,10 +213,9 @@ func TestStreamModeSilent(t *testing.T) {
 	_ = emitter.Emit(Event{Type: "dispatch_start"})
 	_ = emitter.Emit(Event{Type: "dispatch_end"})
 	_ = emitter.Emit(Event{Type: "error"})
-	_ = emitter.Emit(Event{Type: "frozen_warning"})
 	_ = emitter.Emit(Event{Type: "progress"})
 
-	// Check stderr: should only contain dispatch_start, dispatch_end, error, frozen_warning
+	// Check stderr: should only contain dispatch_start, dispatch_end, error
 	stderrLines := strings.Split(strings.TrimSpace(stderrBuf.String()), "\n")
 	stderrTypes := make(map[string]bool)
 	for _, line := range stderrLines {
@@ -231,7 +230,6 @@ func TestStreamModeSilent(t *testing.T) {
 		"dispatch_start": true,
 		"dispatch_end":   true,
 		"error":          true,
-		"frozen_warning": true,
 	}
 	for typ := range stderrTypes {
 		if !allowedInSilent[typ] {
@@ -243,18 +241,18 @@ func TestStreamModeSilent(t *testing.T) {
 			t.Errorf("stderr missing %q which should be present in silent mode", typ)
 		}
 	}
-	if len(stderrTypes) != 4 {
-		t.Errorf("expected 4 event types in stderr, got %d: %v", len(stderrTypes), stderrTypes)
+	if len(stderrTypes) != 3 {
+		t.Errorf("expected 3 event types in stderr, got %d: %v", len(stderrTypes), stderrTypes)
 	}
 
-	// Check event log: should contain all 10
+	// Check event log: should contain all 9
 	logData, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatalf("read log: %v", err)
 	}
 	logLines := strings.Split(strings.TrimSpace(string(logData)), "\n")
-	if len(logLines) != 10 {
-		t.Fatalf("expected 10 lines in event log, got %d", len(logLines))
+	if len(logLines) != 9 {
+		t.Fatalf("expected 9 lines in event log, got %d", len(logLines))
 	}
 }
 
@@ -279,7 +277,7 @@ func TestStreamModeNormal(t *testing.T) {
 	_ = emitter.Emit(Event{Type: "dispatch_start"})
 	_ = emitter.Emit(Event{Type: "dispatch_end"})
 	_ = emitter.Emit(Event{Type: "error"})
-	_ = emitter.Emit(Event{Type: "frozen_warning"})
+	_ = emitter.Emit(Event{Type: "timeout_warning"})
 	_ = emitter.Emit(Event{Type: "progress"})
 
 	// In Normal mode: all 10 should appear in stderr

@@ -350,8 +350,6 @@ func formatTimelineEvent(sb *strings.Builder, evt *traceEvent) {
 		sb.WriteString(fmt.Sprintf("[%s] COMMAND %s\n", ts, truncateStr(evt.Command, 100)))
 	case "error":
 		sb.WriteString(fmt.Sprintf("[%s] ERROR code=%s msg=%s\n", ts, evt.ErrorCode, truncateStr(evt.Message, 100)))
-	case "frozen_warning":
-		sb.WriteString(fmt.Sprintf("[%s] FROZEN_WARNING silence=%ds\n", ts, evt.SilenceSeconds))
 	case "heartbeat":
 		// Skip heartbeats to keep summary compact.
 	case "progress":

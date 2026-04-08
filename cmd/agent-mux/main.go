@@ -342,12 +342,6 @@ func runWithTerminalCheck(args []string, stdin io.Reader, stdout, stderr io.Writ
 	if _, ok := spec.EngineOpts["heartbeat_interval_sec"]; !ok {
 		spec.EngineOpts["heartbeat_interval_sec"] = config.HeartbeatIntervalSec()
 	}
-	if _, ok := spec.EngineOpts["silence_warn_seconds"]; !ok {
-		spec.EngineOpts["silence_warn_seconds"] = config.SilenceWarnSeconds()
-	}
-	if _, ok := spec.EngineOpts["silence_kill_seconds"]; !ok {
-		spec.EngineOpts["silence_kill_seconds"] = config.SilenceKillSeconds()
-	}
 	// Apply default permission mode from env if not set by CLI.
 	if _, ok := spec.EngineOpts["permission-mode"]; !ok || spec.EngineOpts["permission-mode"] == "" {
 		if !flagsSet["permission-mode"] {

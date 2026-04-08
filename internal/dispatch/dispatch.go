@@ -190,11 +190,11 @@ var ErrorCatalog = map[string]ErrorInfo{
 		Example:   "Install the harness, confirm `codex`, `claude`, or `gemini` resolves on PATH, then retry the same agent-mux command.",
 		Retryable: false,
 	},
-	"frozen_tool_call": {
-		Message:   "Worker appears stuck in a tool call.",
-		Hint:      "Worker stopped producing harness events while likely blocked in a hanging tool or shell command. Partial work was preserved in the artifact directory.",
-		Example:   "Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". If long commands are expected, raise `silence_kill_seconds` in config.",
-		Retryable: true,
+	"killed_by_user": {
+		Message:   "Process was terminated by an external signal.",
+		Hint:      "Process was terminated by an external signal (SIGTERM/SIGKILL). This is not a worker failure — the process was killed by the operator or the OS.",
+		Example:   "If you still need the work, rerun the dispatch. Check system logs if the kill was unexpected.",
+		Retryable: false,
 	},
 	"invalid_args": {
 		Message:   "Invalid dispatch arguments.",
@@ -224,12 +224,6 @@ var ErrorCatalog = map[string]ErrorInfo{
 		Message:   "Harness process failed to start.",
 		Hint:      "The harness process failed before a working session started.",
 		Example:   "Check the harness install and arguments, then retry. Example: verify the engine binary runs directly from the same shell.",
-		Retryable: true,
-	},
-	"frozen_killed": {
-		Message:   "Worker killed after prolonged silence.",
-		Hint:      "Worker was killed after prolonged silence - likely stuck in a hanging tool call. Partial work was preserved in the artifact directory.",
-		Example:   "Retry with a narrower task: agent-mux -P=lifter --cwd /repo \"<narrowed prompt>\". Or extend silence timeout: add silence_kill_seconds=300 to config.",
 		Retryable: true,
 	},
 	"signal_killed": {
@@ -409,15 +403,6 @@ func BuildTimedOutResult(spec *types.DispatchSpec, response, reason string, acti
 	result.Partial = true
 	result.Recoverable = true
 	result.Reason = reason
-	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
-	return result
-}
-func BuildStallTimeoutResult(spec *types.DispatchSpec, response string, silenceSeconds int, dispatchErr *types.DispatchError, activity *types.DispatchActivity, metadata *types.DispatchMetadata, durationMS int64) *types.DispatchResult {
-	result := baseResult(spec, types.StatusStallTimeout, shapeTerminalResponse(response), activity, metadata, durationMS)
-	result.Partial = true
-	result.Recoverable = true
-	result.Reason = fmt.Sprintf("No NDJSON output for %ds. Process killed due to stall timeout.", silenceSeconds)
-	result.Error = dispatchErr
 	result.Artifacts = ScanArtifacts(spec.ArtifactDir)
 	return result
 }

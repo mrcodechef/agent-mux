@@ -91,7 +91,7 @@ func TestGeminiBuildArgsWithAddDirs(t *testing.T) {
 	}
 }
 
-func TestGeminiBuildArgsNoIncludeDirsWhenEmpty(t *testing.T) {
+func TestGeminiBuildArgsAlwaysIncludesHomeTmp(t *testing.T) {
 	a := &GeminiAdapter{}
 
 	spec := &types.DispatchSpec{
@@ -100,7 +100,22 @@ func TestGeminiBuildArgsNoIncludeDirsWhenEmpty(t *testing.T) {
 	}
 
 	args := a.BuildArgs(spec)
-	assertNotContains(t, args, "--include-directories")
+	assertContains(t, args, "--include-directories")
+	idx := indexOf(args, "--include-directories")
+	if idx == -1 || idx+1 >= len(args) {
+		t.Fatalf("missing --include-directories value in args: %#v", args)
+	}
+	val := args[idx+1]
+	if !strings.Contains(val, "/tmp") {
+		t.Fatalf("--include-directories value = %q, want /tmp present", val)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("UserHomeDir: %v", err)
+	}
+	if !strings.Contains(val, home) {
+		t.Fatalf("--include-directories value = %q, want $HOME (%s) present", val, home)
+	}
 }
 
 func TestGeminiEnvVarsWritesSystemPromptFile(t *testing.T) {

@@ -208,53 +208,6 @@ func buildCasesV1(cwd string) []TestCase {
 			JudgePrompt:  "The worker should demonstrate it read both files and can compare them. It should mention: (1) both are utility/helper programs, (2) Go vs Python language differences, (3) specific functions from each file (processNames from main.go, format_table or truncate from helpers.py). Pass if at least 2 of these 3 points are addressed.",
 		},
 
-		// ── Liveness ────────────────────────────────────────────────
-		{
-			Name:     "freeze-watchdog",
-			Category: CatLiveness,
-			Engine:   "codex",
-			Model:    "gpt-5.4-mini",
-			Effort:   "high",
-			Prompt:   "Your task requires exactly one step: run `bash scripts/freeze.sh`. You MUST wait synchronously — do not return a response until the command finishes. Do not describe what you are doing. Do not produce any output before the command completes. Execute it now and block until it exits.",
-			CWD:      cwd,
-			// Short agent-mux timeout so the frozen kill triggers quickly.
-			TimeoutSec:   120,
-			MaxWallClock: 90 * time.Second,
-			SkipSkills:   true,
-			EngineOpts: map[string]string{
-				"silence_warn_seconds": "5",
-				"silence_kill_seconds": "12",
-			},
-			Evaluate: compose(
-				statusIs("failed"),
-				errorCodeIs("frozen_killed"),
-				hasEvent("frozen_warning"),
-			),
-		},
-		{
-			Name:     "freeze-stdin-nudge",
-			Category: CatEvents,
-			Engine:   "codex",
-			Model:    "gpt-5.4-mini",
-			Effort:   "high",
-			Prompt:   "Your task requires exactly one step: run `bash scripts/freeze.sh`. You MUST wait synchronously — do not return a response until the command finishes. Do not describe what you are doing. Do not produce any output before the command completes. Execute it now and block until it exits.",
-			CWD:      cwd,
-			// Tight thresholds: warn at 5s, kill at 12s.
-			TimeoutSec:   120,
-			MaxWallClock: 90 * time.Second,
-			SkipSkills:   true,
-			EngineOpts: map[string]string{
-				"silence_warn_seconds": "5",
-				"silence_kill_seconds": "12",
-			},
-			Evaluate: compose(
-				// Accept both completed (Codex finished before kill) and failed (frozen_killed).
-				// The real assertion is the event sequence — frozen_warning + stdin nudge info event.
-				statusIsOneOf("completed", "failed"),
-				hasEventSequence("frozen_warning", "info"),
-			),
-		},
-
 		// ── Error ───────────────────────────────────────────────────
 		{
 			Name:         "intentional-fail",
@@ -437,16 +390,6 @@ func buildCasesV1(cwd string) []TestCase {
 					Reason: "async ack valid, result collected successfully"}
 			},
 		},
-		// TODO: steer-extend test case skipped. Testing extend requires dispatching
-		// a task with very short silence thresholds, then immediately steering extend
-		// from a concurrent goroutine, and verifying the watchdog doesn't kill at the
-		// original threshold. This is inherently timing-dependent and flaky in CI.
-		// The steering mechanism itself (control.json write + watchdog read) is unit-tested.
-		// A reliable integration test would need: (1) a freeze.sh variant that outputs
-		// periodic keepalives, (2) silence thresholds tuned to millisecond precision,
-		// (3) cross-goroutine coordination with the dispatch loop. Parking until we
-		// have a deterministic test harness for watchdog timing.
-
 		// ── Steering ────────────────────────────────────────────────────
 		{
 			Name:         "steer-nudge",
