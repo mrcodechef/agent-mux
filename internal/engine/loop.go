@@ -327,6 +327,7 @@ func (e *LoopEngine) Dispatch(ctx context.Context, spec *types.DispatchSpec) (*t
 		case types.EventProgress:
 			if evt.Text != "" {
 				lastProgressText += evt.Text
+				updateActivity("generating...")
 			}
 			_ = emitter.EmitProgress(truncate(evt.Text, 200))
 
