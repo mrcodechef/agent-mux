@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/buildoak/agent-mux/internal/sanitize"
+	"gopkg.in/yaml.v3"
 )
 
 // SkillSearchResult describes a discovered skill and where it was found.
@@ -37,7 +38,7 @@ func LoadSkills(names []string, cwd string, sourceName string) (prompt string, p
 	roots := buildSearchRoots(cwd)
 
 	seen := make(map[string]struct{}, len(names))
-	blocks := make([]string, 0, len(names))
+	refs := make([]string, 0, len(names))
 	pathDirs = make([]string, 0)
 
 	for _, name := range names {
@@ -55,9 +56,9 @@ func LoadSkills(names []string, cwd string, sourceName string) (prompt string, p
 			return "", nil, skillNotFoundError(name, sourceName, roots)
 		}
 
-		trimmed := strings.TrimRight(string(content), "\r\n")
-		block := fmt.Sprintf("<skill name=%q>\n%s\n</skill>\n", name, trimmed)
-		blocks = append(blocks, block)
+		skillPath := filepath.Join(resolvedRoot, name, "SKILL.md")
+		desc := extractSkillDescription(content)
+		refs = append(refs, fmt.Sprintf("- %s: %s → %s", name, desc, skillPath))
 
 		scriptsDir := filepath.Join(resolvedRoot, name, "scripts")
 		info, statErr := os.Stat(scriptsDir)
@@ -68,7 +69,11 @@ func LoadSkills(names []string, cwd string, sourceName string) (prompt string, p
 		}
 	}
 
-	return strings.Join(blocks, "\n"), pathDirs, nil
+	if len(refs) == 0 {
+		return "", pathDirs, nil
+	}
+	block := "Available skills (read the SKILL.md file when you need the skill's instructions):\n" + strings.Join(refs, "\n") + "\n"
+	return block, pathDirs, nil
 }
 
 // searchRoot describes one root directory to search for skills and a
@@ -236,6 +241,28 @@ func collectSkills(skillsRoot string, seen map[string]struct{}) {
 		}
 		seen[entry.Name()] = struct{}{}
 	}
+}
+
+// extractSkillDescription parses YAML frontmatter from a SKILL.md file and
+// returns a short description string. Falls back to the skill name if parsing
+// fails or no description is present.
+func extractSkillDescription(content []byte) string {
+	fm, _, err := splitFrontmatter(content)
+	if err != nil || len(fm) == 0 {
+		return "(no description)"
+	}
+	var parsed struct {
+		Description string `yaml:"description"`
+	}
+	if err := yaml.Unmarshal(fm, &parsed); err != nil || parsed.Description == "" {
+		return "(no description)"
+	}
+	desc := strings.TrimSpace(parsed.Description)
+	firstLine := strings.SplitN(desc, "\n", 2)[0]
+	if len(firstLine) > 100 {
+		firstLine = firstLine[:97] + "..."
+	}
+	return firstLine
 }
 
 // expandHome replaces a leading ~ with the user's home directory.

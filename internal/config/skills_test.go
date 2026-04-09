@@ -9,23 +9,28 @@ import (
 
 func TestLoadSkillsSingleSkill(t *testing.T) {
 	cwd := t.TempDir()
-	writeSkillFile(t, cwd, "go", "Use Go conventions.")
+	writeSkillFile(t, cwd, "go", "---\ndescription: Use Go conventions.\n---\nUse Go conventions.")
 
 	prompt, pathDirs, err := LoadSkills([]string{"go"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
-	want := "<skill name=\"go\">\nUse Go conventions.\n</skill>\n"
-	if prompt != want {
-		t.Fatalf("prompt = %q, want %q", prompt, want)
+	if !strings.Contains(prompt, "Available skills") {
+		t.Fatalf("prompt missing header: %q", prompt)
+	}
+	if !strings.Contains(prompt, "- go: Use Go conventions.") {
+		t.Fatalf("prompt missing skill reference: %q", prompt)
+	}
+	if !strings.Contains(prompt, "SKILL.md") {
+		t.Fatalf("prompt missing SKILL.md path: %q", prompt)
 	}
 	if len(pathDirs) != 0 {
 		t.Fatalf("pathDirs = %#v, want empty", pathDirs)
 	}
 }
 
-func TestLoadSkillsTrimsTrailingNewlineBeforeClosingTag(t *testing.T) {
+func TestLoadSkillsNoFrontmatterFallback(t *testing.T) {
 	cwd := t.TempDir()
 	writeSkillFile(t, cwd, "go", "Use Go conventions.\n")
 
@@ -34,25 +39,25 @@ func TestLoadSkillsTrimsTrailingNewlineBeforeClosingTag(t *testing.T) {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
-	want := "<skill name=\"go\">\nUse Go conventions.\n</skill>\n"
-	if prompt != want {
-		t.Fatalf("prompt = %q, want %q", prompt, want)
+	if !strings.Contains(prompt, "- go: (no description)") {
+		t.Fatalf("prompt = %q, want fallback description", prompt)
 	}
 }
 
 func TestLoadSkillsMultipleSkillsInOrder(t *testing.T) {
 	cwd := t.TempDir()
-	writeSkillFile(t, cwd, "go", "Go only.")
-	writeSkillFile(t, cwd, "review", "Review for regressions.")
+	writeSkillFile(t, cwd, "go", "---\ndescription: Go only.\n---\nGo only.")
+	writeSkillFile(t, cwd, "review", "---\ndescription: Review for regressions.\n---\nReview for regressions.")
 
 	prompt, pathDirs, err := LoadSkills([]string{"go", "review"}, cwd, "")
 	if err != nil {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
-	want := "<skill name=\"go\">\nGo only.\n</skill>\n\n<skill name=\"review\">\nReview for regressions.\n</skill>\n"
-	if prompt != want {
-		t.Fatalf("prompt = %q, want %q", prompt, want)
+	goIdx := strings.Index(prompt, "- go:")
+	reviewIdx := strings.Index(prompt, "- review:")
+	if goIdx < 0 || reviewIdx < 0 || goIdx >= reviewIdx {
+		t.Fatalf("skills not in order: %q", prompt)
 	}
 	if len(pathDirs) != 0 {
 		t.Fatalf("pathDirs = %#v, want empty", pathDirs)
@@ -68,8 +73,8 @@ func TestLoadSkillsDeduplicatesNames(t *testing.T) {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
-	if strings.Count(prompt, `<skill name="go">`) != 1 {
-		t.Fatalf("prompt = %q, want single wrapped skill", prompt)
+	if strings.Count(prompt, "- go:") != 1 {
+		t.Fatalf("prompt = %q, want single skill reference", prompt)
 	}
 	if len(pathDirs) != 0 {
 		t.Fatalf("pathDirs = %#v, want empty", pathDirs)
@@ -243,9 +248,11 @@ func TestLoadSkillsEnvSearchPathFallback(t *testing.T) {
 		t.Fatalf("LoadSkills with env search_path: %v", err)
 	}
 
-	want := "<skill name=\"remote-skill\">\nRemote skill content.\n</skill>\n"
-	if prompt != want {
-		t.Fatalf("prompt = %q, want %q", prompt, want)
+	if !strings.Contains(prompt, "- remote-skill:") {
+		t.Fatalf("prompt = %q, want remote-skill reference", prompt)
+	}
+	if !strings.Contains(prompt, "SKILL.md") {
+		t.Fatalf("prompt = %q, want SKILL.md path", prompt)
 	}
 }
 
@@ -266,9 +273,8 @@ func TestLoadSkillsAgentMuxDirConvention(t *testing.T) {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
-	want := "<skill name=\"mux-skill\">\nMux skill.\n</skill>\n"
-	if prompt != want {
-		t.Fatalf("prompt = %q, want %q", prompt, want)
+	if !strings.Contains(prompt, "- mux-skill:") {
+		t.Fatalf("prompt = %q, want mux-skill reference", prompt)
 	}
 }
 
@@ -294,13 +300,12 @@ func TestLoadSkillsCwdWinsOverEnvPath(t *testing.T) {
 		t.Fatalf("LoadSkills: %v", err)
 	}
 
-	// env paths are prepended, but cwd/.agent-mux/skills and cwd/.claude/skills come after
-	// Since env is prepended, it actually wins. But writeSkillFile writes to .claude/skills.
-	// The cwd .claude/skills should come after env. So env wins here.
-	// Actually, the env is prepended to the search order so it comes first.
-	// Let's verify the actual behavior:
-	if !strings.Contains(prompt, "version") {
-		t.Fatalf("prompt = %q, want a version", prompt)
+	if !strings.Contains(prompt, "- shared:") {
+		t.Fatalf("prompt = %q, want shared skill reference", prompt)
+	}
+	// env is prepended to search order, so env root wins
+	if !strings.Contains(prompt, searchDir) {
+		t.Fatalf("prompt = %q, want env search path %q to win", prompt, searchDir)
 	}
 }
 
