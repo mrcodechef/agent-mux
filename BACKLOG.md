@@ -360,6 +360,39 @@ by manually removing entries from `~/.agent-mux/dispatches/`.
 
 ---
 
+### F-15: Multi-ID status endpoint for batched downstream queries
+**Type:** feature | **Priority:** P2 | **Status:** open
+**Decided:** `coordinator` (2026-04-16)
+
+Downstream consumers (notably `agent-tickets`) sometimes need status for
+several dispatch IDs in one shot. Current surface forces a trade-off:
+
+- `agent-mux status <id> --json` — per-ID fork. N dispatches = N subprocess
+  spawns. Killed P-cores on the tickets side until the caller stopped
+  polling terminal cards every 30s.
+- `agent-mux list --json` — returns everything. Wasteful when the caller
+  only needs a handful of known IDs.
+
+**Proposed surface:** `agent-mux status --ids id1,id2,id3 --json` — one fork,
+returns an array keyed by ID, same per-entry schema as current
+`status --json`. Missing IDs reported explicitly (not silent omission).
+
+**Why P2, not P1:** agent-tickets ships a local fix first (2026-04-16 batch:
+deletes the backfill loop that triggered the need, carves `tokens` out of
+the card schema). That removes the hot path. But the API-ergonomics issue
+is real for future downstream consumers that legitimately need per-ID status
+for many IDs — they'll hit the same fork-storm shape. Logging here so it's
+not rediscovered from scratch.
+
+**Context:** agent-tickets `reconcile.go` used to call `agent-mux status <id>`
+for every terminal card with missing `tokens`/`session_id` frontmatter — 293
+forks per 30s tick, each burning ~40% of one P-core. Root cause was schema
+drift (tickets read `in`/`out`, agent-mux emits `input`/`output`) plus the
+field never being emitted on `status` at all — so the tickets-side fix is
+correct. This backlog item covers the residual API shape question only.
+
+---
+
 ## P3 — Parked
 
 ### L-1: `response_max_chars` / truncation
